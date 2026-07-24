@@ -71,6 +71,7 @@ struct RepositoryToolbar: ToolbarContent {
             } label: {
                 Label("Fetch", systemImage: "arrow.down.circle")
             }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Fetch all remotes")
             .disabled(store.isLoading)
 
@@ -79,6 +80,7 @@ struct RepositoryToolbar: ToolbarContent {
             } label: {
                 Label("Pull", systemImage: "arrow.down.to.line")
             }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Pull with fast-forward only")
             .disabled(store.isLoading)
 
@@ -87,6 +89,7 @@ struct RepositoryToolbar: ToolbarContent {
             } label: {
                 Label("Push", systemImage: "arrow.up.to.line")
             }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Push the current branch")
             .disabled(store.isLoading)
         }
@@ -115,8 +118,9 @@ struct RepositoryToolbar: ToolbarContent {
             Button {
                 showingBranchSheet = true
             } label: {
-                Label("New Branch", systemImage: "arrow.triangle.branch.badge.plus")
+                Label("New Branch", systemImage: "arrow.triangle.branch")
             }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Create a branch")
 
             Button {
@@ -124,6 +128,7 @@ struct RepositoryToolbar: ToolbarContent {
             } label: {
                 Label("Stash", systemImage: "archivebox")
             }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Stash working directory changes")
             .disabled(store.changes.isEmpty)
 
@@ -132,6 +137,7 @@ struct RepositoryToolbar: ToolbarContent {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Refresh repository")
             .disabled(store.isLoading)
         }
@@ -146,7 +152,7 @@ struct BranchSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Image(systemName: "arrow.triangle.branch.badge.plus")
+                Image(systemName: "arrow.triangle.branch")
                     .font(.title)
                     .foregroundStyle(GitForkTheme.accent)
                 VStack(alignment: .leading) {
@@ -166,8 +172,10 @@ struct BranchSheet: View {
                 Button("Cancel", role: .cancel) {
                     isPresented = false
                 }
-                Button("Create & Checkout") {
+                Button {
                     create()
+                } label: {
+                    Label("Create & Checkout", systemImage: "arrow.triangle.branch")
                 }
                 .buttonStyle(.borderedProminent)
                 .help("Create the branch at HEAD and check it out")

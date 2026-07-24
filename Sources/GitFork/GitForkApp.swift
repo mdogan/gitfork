@@ -14,6 +14,12 @@ struct GitForkApp: App {
         .defaultSize(width: 1380, height: 840)
         .windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(before: .appSettings) {
+                Button("Install Command Line Tool…") {
+                    store.isShowingCLIInstaller = true
+                }
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("Open Repository…") {
                     store.chooseRepository()
@@ -51,6 +57,12 @@ struct RootView: View {
             } else {
                 RepositoryView()
             }
+        }
+        .onOpenURL { url in
+            store.openExternalURL(url)
+        }
+        .sheet(isPresented: $store.isShowingCLIInstaller) {
+            CLIInstallerView()
         }
         .alert(
             "GitFork",

@@ -89,12 +89,9 @@ private struct SidebarRow<Badge: View>: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GitForkHoverButtonStyle(.row(isSelected: isSelected)))
         .help("Show \(title)")
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? GitForkTheme.accent.opacity(0.13) : .clear)
-        )
+        .listRowBackground(Color.clear)
     }
 }
 
@@ -130,7 +127,7 @@ private struct RepositoryIdentityView: View {
                 } label: {
                     Image(systemName: "folder")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GitForkHoverButtonStyle(.icon))
                 .help("Open another repository")
             }
             .padding(10)

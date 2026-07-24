@@ -79,7 +79,7 @@ private struct ChangeSectionHeader: View {
             Button(actionTitle, action: action)
                 .font(.caption)
                 .textCase(nil)
-                .buttonStyle(.plain)
+                .buttonStyle(GitForkHoverButtonStyle(.text))
                 .foregroundStyle(GitForkTheme.accent)
                 .help(actionTitle)
         }
@@ -123,19 +123,22 @@ private struct ChangeRow: View {
                         .frame(width: 19, height: 19)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(GitForkHoverButtonStyle(.icon))
                 .help(staged ? "Unstage" : "Stage")
             }
             .contentShape(Rectangle())
             .padding(.vertical, 2)
         }
-        .buttonStyle(.plain)
-        .help("View \(staged ? "staged" : "working tree") diff for \(change.path)")
-        .listRowBackground(
-            store.selectedChange == change && store.selectedChangeIsStaged == staged
-                ? GitForkTheme.accent.opacity(0.12)
-                : Color.clear
+        .buttonStyle(
+            GitForkHoverButtonStyle(
+                .row(
+                    isSelected: store.selectedChange == change
+                        && store.selectedChangeIsStaged == staged
+                )
+            )
         )
+        .help("View \(staged ? "staged" : "working tree") diff for \(change.path)")
+        .listRowBackground(Color.clear)
     }
 }
 

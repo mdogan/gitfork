@@ -95,6 +95,7 @@ private struct ChangeHeader: View {
             } label: {
                 Label(staged ? "Unstage" : "Stage", systemImage: staged ? "minus" : "plus")
             }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help(staged ? "Move this file back to working changes" : "Stage this file for commit")
         }
         .padding(14)

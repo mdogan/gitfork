@@ -24,6 +24,7 @@ final class RepositoryStore: ObservableObject {
     @Published var commitMessage = ""
     @Published var amend = false
     @Published var errorMessage: String?
+    @Published var isShowingCLIInstaller = false
     @Published private(set) var recentRepositories: [URL] = []
 
     private let client = GitClient()
@@ -89,6 +90,14 @@ final class RepositoryStore: ObservableObject {
                 try await self.reload(root: root)
             }
         }
+    }
+
+    func openExternalURL(_ url: URL) {
+        guard let path = GitForkExternalURL.repositoryPath(from: url) else {
+            errorMessage = "GitFork received an invalid repository URL."
+            return
+        }
+        openRepository(URL(fileURLWithPath: path, isDirectory: true))
     }
 
     func refresh() {

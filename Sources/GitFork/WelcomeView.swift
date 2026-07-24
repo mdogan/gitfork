@@ -76,7 +76,7 @@ struct WelcomeView: View {
                             .contentShape(Rectangle())
                             .padding(9)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(GitForkHoverButtonStyle(.row(isSelected: false)))
                         .help("Open \(url.path)")
                     }
                 }

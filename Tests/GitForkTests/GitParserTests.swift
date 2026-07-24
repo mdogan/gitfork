@@ -80,6 +80,72 @@ struct GitParserTests {
         #expect(diff.contains("+Changed"))
     }
 
+    @Test
+    func parsesRepositoryOpenURL() throws {
+        let url = try #require(
+            URL(string: "gitfork://open?path=%2Ftmp%2FA%20Repository")
+        )
+
+        #expect(
+            GitForkExternalURL.repositoryPath(from: url)
+                == "/tmp/A Repository"
+        )
+        #expect(
+            GitForkExternalURL.repositoryPath(
+                from: try #require(URL(string: "https://example.com"))
+            ) == nil
+        )
+    }
+
+    @Test
+    func installsBundledCLIIntoWritableDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkInstallerTests-\(UUID().uuidString)")
+        let sourceDirectory = root.appendingPathComponent("Source")
+        let destinationDirectory = root.appendingPathComponent("bin")
+        let helper = sourceDirectory.appendingPathComponent("fork")
+        try FileManager.default.createDirectory(
+            at: sourceDirectory,
+            withIntermediateDirectories: true
+        )
+        try Data("#!/bin/sh\n".utf8).write(to: helper)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: helper.path
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let installer = CLIInstallerService(helperURL: helper)
+        let installed = try await installer.install(
+            in: destinationDirectory.path,
+            replacing: false
+        )
+
+        #expect(installed == destinationDirectory.appendingPathComponent("fork"))
+        #expect(FileManager.default.isExecutableFile(atPath: installed.path))
+        #expect(installer.status(in: destinationDirectory.path) == .installed)
+
+        try Data("#!/bin/sh\necho other\n".utf8).write(to: installed)
+        #expect(installer.status(in: destinationDirectory.path) == .differentExecutable)
+
+        var rejectedReplacement = false
+        do {
+            _ = try await installer.install(
+                in: destinationDirectory.path,
+                replacing: false
+            )
+        } catch {
+            rejectedReplacement = true
+        }
+        #expect(rejectedReplacement)
+
+        _ = try await installer.install(
+            in: destinationDirectory.path,
+            replacing: true
+        )
+        #expect(installer.status(in: destinationDirectory.path) == .installed)
+    }
+
     private func runGit(_ arguments: [String], at root: URL) throws {
         let process = Process()
         let errors = Pipe()

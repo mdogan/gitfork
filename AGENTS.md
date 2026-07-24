@@ -21,9 +21,14 @@ Swift cannot reasonably satisfy.
 - `Sources/GitFork/RepositoryStore.swift`: `@MainActor` application state and UI
   actions
 - `Sources/GitFork/GitClient.swift`: asynchronous `/usr/bin/git` process wrapper
+- `Sources/GitFork/CLIInstaller.swift`: in-app `fork` helper installation UI and
+  service
+- `Sources/ForkCLIKit/`: command parsing, repository discovery, and app launch URL
+- `Sources/ForkCLI/`: `fork` executable entry point
 - `Sources/GitFork/Models.swift`: Git domain models and output parsers
 - `Sources/GitFork/*View.swift`: SwiftUI screens and reusable UI
 - `Tests/GitForkTests/`: parser and real-repository integration tests
+- `Tests/ForkCLIKitTests/`: CLI parsing and repository discovery tests
 - `Resources/Info.plist`: macOS app-bundle metadata
 - `scripts/build-app.sh`: release build, app packaging, and ad-hoc signing
 
@@ -85,6 +90,8 @@ swift test --disable-sandbox
 - Use native SwiftUI and AppKit controls and standard macOS interaction patterns.
 - Use SF Symbols instead of custom raster icons when a suitable symbol exists.
 - Add `.help(...)` tooltips to icon-only and compact action controls.
+- Give clickable rows and compact controls a visible hover state with pressed and
+  disabled feedback; tooltips alone are not sufficient affordance.
 - Support light mode, dark mode, keyboard navigation, and text selection in
   commit and diff views.
 - Keep the sidebar and commit-list columns bounded. Leave the detail column
@@ -94,6 +101,9 @@ swift test --disable-sandbox
   a narrow strip.
 - Repository switching uses the persisted `recentRepositories` list. Clearly
   mark the active repository and retain an “Open Other Repository…” action.
+- The `fork` helper is bundled under `Contents/Helpers` and installed from the
+  application menu. Keep its `gitfork://open?path=...` contract synchronized
+  with `GitForkExternalURL`.
 - Use confirmation UI before adding destructive working-tree operations.
 
 ## Git Behavior

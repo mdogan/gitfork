@@ -21,7 +21,7 @@ cp "${BUILD_DIRECTORY}/GitFork" "${MACOS_DIRECTORY}/GitFork"
 cp "${BUILD_DIRECTORY}/fork" "${HELPERS_DIRECTORY}/fork"
 chmod 755 "${HELPERS_DIRECTORY}/fork"
 cp "Resources/Info.plist" "${CONTENTS_DIRECTORY}/Info.plist"
-cp "Resources/AppIcon.icns" "${RESOURCES_DIRECTORY}/AppIcon.icns"
+cp "Resources/AppIcon-simple-blue.icns" "${RESOURCES_DIRECTORY}/AppIcon.icns"
 
 codesign --force --deep --sign - "${APP_DIRECTORY}"
 

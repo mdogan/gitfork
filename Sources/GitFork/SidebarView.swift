@@ -169,6 +169,8 @@ private struct SidebarSectionHeader: View {
             isExpanded.toggle()
         } label: {
             Text(title)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }

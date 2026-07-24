@@ -52,7 +52,7 @@ struct SidebarView: View {
                 }
             }
 
-            Section("Branches", isExpanded: $branchesExpanded) {
+            Section(isExpanded: $branchesExpanded) {
                 if let currentBranch {
                     ReferenceSidebarRow(
                         reference: currentBranch,
@@ -67,25 +67,31 @@ struct SidebarView: View {
                 if currentBranch == nil && remainingLocalBranches.isEmpty {
                     EmptySidebarRow(title: "No Branches")
                 }
+            } header: {
+                SidebarSectionHeader(title: "Branches", isExpanded: $branchesExpanded)
             }
 
-            Section("Remotes", isExpanded: $remotesExpanded) {
+            Section(isExpanded: $remotesExpanded) {
                 if references(of: .remoteBranch).isEmpty {
                     EmptySidebarRow(title: "No Remotes")
                 } else {
                     ReferenceTreeRows(references: references(of: .remoteBranch))
                 }
+            } header: {
+                SidebarSectionHeader(title: "Remotes", isExpanded: $remotesExpanded)
             }
 
-            Section("Tags", isExpanded: $tagsExpanded) {
+            Section(isExpanded: $tagsExpanded) {
                 if references(of: .tag).isEmpty {
                     EmptySidebarRow(title: "No Tags")
                 } else {
                     ReferenceTreeRows(references: references(of: .tag))
                 }
+            } header: {
+                SidebarSectionHeader(title: "Tags", isExpanded: $tagsExpanded)
             }
 
-            Section("Stashes", isExpanded: $stashesExpanded) {
+            Section(isExpanded: $stashesExpanded) {
                 if store.stashes.isEmpty {
                     EmptySidebarRow(title: "No Stashes")
                 } else {
@@ -106,9 +112,11 @@ struct SidebarView: View {
                         }
                     }
                 }
+            } header: {
+                SidebarSectionHeader(title: "Stashes", isExpanded: $stashesExpanded)
             }
 
-            Section("Worktrees", isExpanded: $worktreesExpanded) {
+            Section(isExpanded: $worktreesExpanded) {
                 if store.worktrees.isEmpty {
                     EmptySidebarRow(title: "No Worktrees")
                 } else {
@@ -141,12 +149,31 @@ struct SidebarView: View {
                         .disabled(worktree.isPrunable)
                     }
                 }
+            } header: {
+                SidebarSectionHeader(title: "Worktrees", isExpanded: $worktreesExpanded)
             }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             RepositoryIdentityView()
         }
+    }
+}
+
+private struct SidebarSectionHeader: View {
+    let title: String
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded ? "Collapse \(title)" : "Expand \(title)")
     }
 }
 

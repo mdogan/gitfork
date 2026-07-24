@@ -223,6 +223,25 @@ private struct DiffTextView: View {
                                     }
                                 }
                                 .padding(.vertical, 8)
+                            } else if !document.files.isEmpty {
+                                LazyVStack(alignment: .leading, spacing: 16) {
+                                    if !document.preambleLines.isEmpty {
+                                        VStack(alignment: .leading, spacing: 0) {
+                                            ForEach(document.preambleLines) { line in
+                                                DiffLineView(
+                                                    line: line,
+                                                    isRangeSelected: false,
+                                                    allowsTextSelection: true
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    ForEach(document.files) { file in
+                                        CommitDiffFileView(file: file)
+                                    }
+                                }
+                                .padding(12)
                             } else {
                                 LazyVStack(alignment: .leading, spacing: 0) {
                                     ForEach(document.lines) { line in
@@ -323,6 +342,50 @@ private struct DiffTextView: View {
     private var discardMessage: String {
         guard let change else { return "" }
         return "The selected working-tree changes in \(change.path) will be permanently discarded. This cannot be undone."
+    }
+}
+
+private struct CommitDiffFileView: View {
+    let file: UnifiedDiffFile
+
+    private var contentLines: ArraySlice<UnifiedDiffLine> {
+        if file.lines.first?.text.hasPrefix("diff --git ") == true {
+            return file.lines.dropFirst()
+        }
+        return file.lines[...]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: "doc.text")
+                    .foregroundStyle(GitForkTheme.blue)
+                Text(file.path)
+                    .font(.callout.monospaced().weight(.semibold))
+                    .textSelection(.enabled)
+                Spacer(minLength: 12)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .background(Color.primary.opacity(0.045))
+
+            Divider()
+
+            ForEach(contentLines) { line in
+                DiffLineView(
+                    line: line,
+                    isRangeSelected: false,
+                    allowsTextSelection: true
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(Color.primary.opacity(0.14))
+        }
     }
 }
 

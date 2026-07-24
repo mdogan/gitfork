@@ -36,8 +36,16 @@ struct UnifiedDiffHunk: Identifiable, Equatable {
     }
 }
 
+struct UnifiedDiffFile: Identifiable, Equatable {
+    let id: Int
+    let path: String
+    let lines: [UnifiedDiffLine]
+}
+
 struct UnifiedDiff {
     let lines: [UnifiedDiffLine]
+    let preambleLines: [UnifiedDiffLine]
+    let files: [UnifiedDiffFile]
     let displayHunks: [UnifiedDiffHunk]
     private let hunks: [Hunk]
 
@@ -115,6 +123,21 @@ struct UnifiedDiff {
         }
 
         lines = parsedLines
+        let fileStarts = parsedLines.indices.filter {
+            parsedLines[$0].text.hasPrefix("diff --git ")
+        }
+        preambleLines = Array(parsedLines[..<(fileStarts.first ?? parsedLines.count)])
+        files = fileStarts.enumerated().map { offset, start in
+            let end = offset + 1 < fileStarts.count
+                ? fileStarts[offset + 1]
+                : parsedLines.count
+            let fileLines = Array(parsedLines[start..<end])
+            return UnifiedDiffFile(
+                id: start,
+                path: Self.filePath(in: fileLines),
+                lines: fileLines
+            )
+        }
         hunks = parsedHunks
         displayHunks = parsedHunks.map { hunk in
             UnifiedDiffHunk(
@@ -127,6 +150,51 @@ struct UnifiedDiff {
 
     var selectableLineIDs: Set<Int> {
         Set(lines.lazy.filter { $0.kind.isSelectableChange }.map(\.id))
+    }
+
+    private static func filePath(in lines: [UnifiedDiffLine]) -> String {
+        let destinationPath = lines.first {
+            $0.text.hasPrefix("rename to ") || $0.text.hasPrefix("copy to ")
+        }
+        .map {
+            $0.text.hasPrefix("rename to ")
+                ? String($0.text.dropFirst("rename to ".count))
+                : String($0.text.dropFirst("copy to ".count))
+        }
+        let newPath = lines.first { $0.text.hasPrefix("+++ ") }
+            .map { String($0.text.dropFirst(4)) }
+        let oldPath = lines.first { $0.text.hasPrefix("--- ") }
+            .map { String($0.text.dropFirst(4)) }
+        let patchPath = newPath == "/dev/null" ? oldPath : newPath
+        let path = destinationPath ?? patchPath ?? diffHeaderPath(lines.first?.text)
+
+        guard var path else {
+            return "Changed file"
+        }
+        if path.hasPrefix("\"a/") || path.hasPrefix("\"b/") {
+            path.removeFirst(3)
+            if path.hasSuffix("\"") {
+                path.removeLast()
+            }
+        } else if path.hasPrefix("a/") || path.hasPrefix("b/") {
+            path.removeFirst(2)
+        }
+        return path
+    }
+
+    private static func diffHeaderPath(_ header: String?) -> String? {
+        guard let header, header.hasPrefix("diff --git ") else { return nil }
+        if let range = header.range(of: " \"b/", options: .backwards) {
+            var path = String(header[range.upperBound...])
+            if path.hasSuffix("\"") {
+                path.removeLast()
+            }
+            return path
+        }
+        if let range = header.range(of: " b/", options: .backwards) {
+            return String(header[range.upperBound...])
+        }
+        return nil
     }
 
     func partialPatch(

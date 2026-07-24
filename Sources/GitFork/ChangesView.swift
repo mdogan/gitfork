@@ -2,9 +2,60 @@ import SwiftUI
 
 struct ChangesView: View {
     @EnvironmentObject private var store: RepositoryStore
+    @Binding var showingStashSheet: Bool
+    @Binding var stashScope: StashScope
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Working Tree")
+                        .font(.headline)
+                    Text(changeCountLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Menu {
+                    Button {
+                        showStashSheet(for: .staged)
+                    } label: {
+                        Label("Staged Changes", systemImage: "checkmark.circle")
+                    }
+                    .disabled(
+                        store.stagedChanges.isEmpty
+                            || hasPartiallyStagedFiles
+                    )
+
+                    Button {
+                        showStashSheet(for: .unstaged)
+                    } label: {
+                        Label("Unstaged Changes", systemImage: "pencil.circle")
+                    }
+                    .disabled(store.unstagedChanges.isEmpty)
+
+                    Divider()
+
+                    Button {
+                        showStashSheet(for: .all)
+                    } label: {
+                        Label("All Changes", systemImage: "tray.full")
+                    }
+                } label: {
+                    Label("Stash Changes", systemImage: "archivebox")
+                }
+                .menuStyle(.borderedButton)
+                .controlSize(.small)
+                .help("Choose which changes to save to a stash")
+                .disabled(store.changes.isEmpty || store.isLoading)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider()
+
             ChangeList()
                 .frame(maxHeight: .infinity)
 
@@ -13,6 +64,20 @@ struct ChangesView: View {
             CommitComposer()
                 .frame(minHeight: 190, idealHeight: 220, maxHeight: 270)
         }
+    }
+
+    private var changeCountLabel: String {
+        let count = store.changes.count
+        return "\(count) changed file\(count == 1 ? "" : "s")"
+    }
+
+    private var hasPartiallyStagedFiles: Bool {
+        store.changes.contains { $0.isStaged && $0.isUnstaged }
+    }
+
+    private func showStashSheet(for scope: StashScope) {
+        stashScope = scope
+        showingStashSheet = true
     }
 }
 
@@ -177,6 +242,7 @@ private struct ChangeRow: View {
                 }
                 .buttonStyle(GitForkHoverButtonStyle(.icon))
                 .help(staged ? "Unstage" : "Stage")
+                .disabled(store.isLoading)
             }
             .contentShape(Rectangle())
         }
@@ -196,6 +262,7 @@ private struct ChangeRow: View {
 
 private struct CommitComposer: View {
     @EnvironmentObject private var store: RepositoryStore
+    @State private var isConfirmingAmend = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -216,6 +283,7 @@ private struct CommitComposer: View {
                     .toggleStyle(.checkbox)
                     .font(.caption)
                     .help("Replace the latest commit")
+                    .disabled(store.isLoading)
             }
 
             TextEditor(text: $store.commitMessage)
@@ -243,7 +311,11 @@ private struct CommitComposer: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    store.createCommit()
+                    if store.amend {
+                        isConfirmingAmend = true
+                    } else {
+                        store.createCommit()
+                    }
                 } label: {
                     Label(
                         commitButtonTitle,
@@ -261,6 +333,17 @@ private struct CommitComposer: View {
         }
         .padding(12)
         .background(.bar)
+        .alert("Amend the Latest Commit?", isPresented: $isConfirmingAmend) {
+            Button("Cancel", role: .cancel) {}
+            Button("Amend Commit", role: .destructive) {
+                store.createCommit()
+            }
+        } message: {
+            Text(
+                "This replaces the latest commit and rewrites local history. "
+                    + "If that commit was already pushed, the remote will no longer match."
+            )
+        }
     }
 
     private var commitButtonTitle: String {

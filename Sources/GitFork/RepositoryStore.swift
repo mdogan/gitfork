@@ -7,6 +7,7 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var repositoryURL: URL?
     @Published private(set) var branch = ""
     @Published private(set) var upstream: String?
+    @Published private(set) var pushTarget: GitPushTarget?
     @Published private(set) var ahead = 0
     @Published private(set) var behind = 0
     @Published private(set) var changes: [WorkingChange] = []
@@ -32,13 +33,13 @@ final class RepositoryStore: ObservableObject {
         }
     }
     @Published var errorMessage: String?
+    @Published var isConfirmingPush = false
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
     @Published private(set) var recentRepositories: [URL] = []
 
     private let client = GitClient()
     private var loadGeneration = 0
-    private var openTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var monitoredState: RepositoryStateToken?
     private var activeOperationID: UUID?
@@ -90,20 +91,17 @@ final class RepositoryStore: ObservableObject {
     }
 
     func openRepository(_ url: URL) {
-        openTask?.cancel()
-        openTask = Task {
-            await perform("Opening repository") {
-                let root = try await self.client.repositoryRoot(from: url)
-                try Task.checkCancellation()
-                self.stopMonitoring()
-                self.repositoryURL = root
-                self.remember(root)
-                self.prepareForRepositorySwitch()
-                try await self.reload(root: root)
-                try Task.checkCancellation()
-                guard self.isCurrentRepository(root) else { return }
-                self.startMonitoring(root: root)
-            }
+        _ = startOperation("Opening repository") {
+            let root = try await self.client.repositoryRoot(from: url)
+            try Task.checkCancellation()
+            self.stopMonitoring()
+            self.repositoryURL = root
+            self.remember(root)
+            self.prepareForRepositorySwitch()
+            try await self.reload(root: root)
+            try Task.checkCancellation()
+            guard self.isCurrentRepository(root) else { return }
+            self.startMonitoring(root: root)
         }
     }
 
@@ -117,10 +115,8 @@ final class RepositoryStore: ObservableObject {
 
     func refresh() {
         guard let root = repositoryURL else { return }
-        Task {
-            await perform("Refreshing") {
-                try await self.reload(root: root, revision: self.selectedReference?.fullName)
-            }
+        _ = startOperation("Refreshing") {
+            try await self.reload(root: root, revision: self.selectedReference?.fullName)
         }
     }
 
@@ -191,31 +187,27 @@ final class RepositoryStore: ObservableObject {
     }
 
     func selectReference(_ reference: GitReference?) {
-        selectedStash = nil
-        selectedReference = reference
-        selectedSection = .history
         guard let root = repositoryURL else { return }
-        Task {
-            await perform("Loading \(reference?.name ?? "history")") {
-                try await self.reload(root: root, revision: reference?.fullName)
-            }
+        _ = startOperation("Loading \(reference?.name ?? "history")") {
+            self.selectedStash = nil
+            self.selectedReference = reference
+            self.selectedSection = .history
+            try await self.reload(root: root, revision: reference?.fullName)
         }
     }
 
     func selectStash(_ stash: GitStash) {
-        selectedStash = stash
-        selectedReference = nil
-        selectedSection = .history
         guard let root = repositoryURL else { return }
-        Task {
-            await perform("Loading \(stash.displayName)") {
-                let commit = try await self.client.commit(
-                    at: root,
-                    revision: stash.selector
-                )
-                guard self.selectedStash?.id == stash.id else { return }
-                self.showCommit(commit)
-            }
+        _ = startOperation("Loading \(stash.displayName)") {
+            self.selectedStash = stash
+            self.selectedReference = nil
+            self.selectedSection = .history
+            let commit = try await self.client.commit(
+                at: root,
+                revision: stash.selector
+            )
+            guard self.selectedStash?.id == stash.id else { return }
+            self.showCommit(commit)
         }
     }
 
@@ -308,13 +300,29 @@ final class RepositoryStore: ObservableObject {
     }
 
     func push() {
+        let target = pushTarget
         mutate("Pushing \(branch)") { root in
-            try await self.client.push(
-                at: root,
-                branch: self.branch,
-                upstream: self.upstream
-            )
+            try await self.client.push(at: root, target: target)
         }
+    }
+
+    func requestPushConfirmation() {
+        guard !isLoading else {
+            showBusyError()
+            return
+        }
+        guard pushTarget != nil else {
+            if branch.hasPrefix("Detached at ") {
+                errorMessage = "Create or check out a branch before pushing a detached HEAD."
+            } else {
+                errorMessage = """
+                This branch has no safe push target. Add a remote or repair its \
+                upstream configuration.
+                """
+            }
+            return
+        }
+        isConfirmingPush = true
     }
 
     func checkout(_ reference: GitReference) {
@@ -343,12 +351,13 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
-    func stash(message: String) {
-        mutate("Stashing changes") { root in
+    func stash(message: String, scope: StashScope = .all) {
+        mutate("Stashing \(scope.title.lowercased())") { root in
             let resolved = message.trimmingCharacters(in: .whitespacesAndNewlines)
             try await self.client.stash(
                 at: root,
-                message: resolved.isEmpty ? "GitFork stash" : resolved
+                message: resolved.isEmpty ? "GitFork stash" : resolved,
+                scope: scope
             )
         }
     }
@@ -373,11 +382,20 @@ final class RepositoryStore: ObservableObject {
         action: @escaping @MainActor (URL) async throws -> Void
     ) {
         guard let root = repositoryURL else { return }
-        Task {
-            await perform(label) {
+        _ = startOperation(label) {
+            do {
                 try await action(root)
-                try await self.reload(root: root, revision: self.selectedReference?.fullName)
+            } catch {
+                try? await self.reload(
+                    root: root,
+                    revision: self.selectedReference?.fullName
+                )
+                throw error
             }
+            try await self.reload(
+                root: root,
+                revision: self.selectedReference?.fullName
+            )
         }
     }
 
@@ -433,6 +451,7 @@ final class RepositoryStore: ObservableObject {
         guard isCurrentRepository(root) else { return }
         branch = snapshot.branch
         upstream = snapshot.upstream
+        pushTarget = snapshot.pushTarget
         ahead = snapshot.ahead
         behind = snapshot.behind
         changes = snapshot.changes
@@ -474,14 +493,29 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
-    private func perform(
+    @discardableResult
+    private func startOperation(
         _ label: String,
         operation: @escaping @MainActor () async throws -> Void
-    ) async {
+    ) -> Task<Void, Never>? {
+        guard activeOperationID == nil, !isLoading else {
+            showBusyError()
+            return nil
+        }
+
         let operationID = UUID()
         activeOperationID = operationID
         isLoading = true
         operationLabel = label
+        return Task {
+            await self.perform(operationID: operationID, operation: operation)
+        }
+    }
+
+    private func perform(
+        operationID: UUID,
+        operation: @escaping @MainActor () async throws -> Void
+    ) async {
         defer {
             if activeOperationID == operationID {
                 activeOperationID = nil
@@ -498,10 +532,16 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    private func showBusyError() {
+        let currentOperation = operationLabel ?? "the current repository operation"
+        errorMessage = "Wait for \(currentOperation) to finish."
+    }
+
     private func prepareForRepositorySwitch() {
         loadGeneration += 1
         branch = ""
         upstream = nil
+        pushTarget = nil
         ahead = 0
         behind = 0
         changes = []
@@ -515,6 +555,9 @@ final class RepositoryStore: ObservableObject {
         selectedCommit = nil
         selectedChange = nil
         selectedSection = .history
+        commitMessage = ""
+        amend = false
+        isConfirmingPush = false
     }
 
     private func isCurrentRepository(_ root: URL) -> Bool {

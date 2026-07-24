@@ -5,7 +5,7 @@ struct RepositoryView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showingBranchSheet = false
     @State private var showingStashSheet = false
-    @State private var isConfirmingPush = false
+    @State private var stashScope: StashScope = .all
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -17,7 +17,10 @@ struct RepositoryView: View {
                 case .history:
                     HistoryView()
                 case .changes:
-                    ChangesView()
+                    ChangesView(
+                        showingStashSheet: $showingStashSheet,
+                        stashScope: $stashScope
+                    )
                 }
             }
             .navigationSplitViewColumnWidth(min: 320, ideal: 430, max: 600)
@@ -28,16 +31,19 @@ struct RepositoryView: View {
             RepositoryToolbar(
                 showingBranchSheet: $showingBranchSheet,
                 showingStashSheet: $showingStashSheet,
-                isConfirmingPush: $isConfirmingPush
+                stashScope: $stashScope
             )
         }
         .sheet(isPresented: $showingBranchSheet) {
             BranchSheet(isPresented: $showingBranchSheet)
         }
         .sheet(isPresented: $showingStashSheet) {
-            StashSheet(isPresented: $showingStashSheet)
+            StashSheet(
+                isPresented: $showingStashSheet,
+                scope: stashScope
+            )
         }
-        .alert("Push \(store.branch)?", isPresented: $isConfirmingPush) {
+        .alert("Push \(store.branch)?", isPresented: $store.isConfirmingPush) {
             Button("Cancel", role: .cancel) {}
             Button("Push") {
                 store.push()
@@ -75,10 +81,13 @@ struct RepositoryView: View {
             summary = store.branch
         }
 
-        if let upstream = store.upstream {
-            return "This will push \(summary) to \(upstream)."
+        if let target = store.pushTarget {
+            let upstreamAction = target.establishesUpstream
+                ? " and set it as the upstream branch"
+                : ""
+            return "This will push \(summary) to \(target.displayName)\(upstreamAction)."
         }
-        return "This will push \(summary) to the remote and set it as the upstream branch."
+        return "GitFork could not resolve a safe push target."
     }
 }
 
@@ -86,7 +95,7 @@ struct RepositoryToolbar: ToolbarContent {
     @EnvironmentObject private var store: RepositoryStore
     @Binding var showingBranchSheet: Bool
     @Binding var showingStashSheet: Bool
-    @Binding var isConfirmingPush: Bool
+    @Binding var stashScope: StashScope
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
@@ -111,7 +120,7 @@ struct RepositoryToolbar: ToolbarContent {
             .disabled(store.isLoading)
 
             Button {
-                isConfirmingPush = true
+                store.requestPushConfirmation()
             } label: {
                 Label("Push", systemImage: "arrow.up.to.line")
             }
@@ -148,15 +157,17 @@ struct RepositoryToolbar: ToolbarContent {
             }
             .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Create a branch")
+            .disabled(store.isLoading)
 
             Button {
+                stashScope = .all
                 showingStashSheet = true
             } label: {
                 Label("Stash", systemImage: "archivebox")
             }
             .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Stash working directory changes")
-            .disabled(store.changes.isEmpty)
+            .disabled(store.changes.isEmpty || store.isLoading)
 
             Button {
                 store.refresh()
@@ -205,7 +216,10 @@ struct BranchSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .help("Create the branch at HEAD and check it out")
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || store.isLoading
+                )
             }
         }
         .padding(24)
@@ -221,17 +235,18 @@ struct BranchSheet: View {
 struct StashSheet: View {
     @EnvironmentObject private var store: RepositoryStore
     @Binding var isPresented: Bool
+    let scope: StashScope
     @State private var message = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Label("Stash Changes", systemImage: "archivebox")
+            Label("Stash \(scope.title)", systemImage: "archivebox")
                 .font(.title2.weight(.semibold))
 
             TextField("Message (optional)", text: $message)
                 .textFieldStyle(.roundedBorder)
 
-            Text("Tracked and untracked changes will be included.")
+            Text(scope.description)
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -241,11 +256,12 @@ struct StashSheet: View {
                     isPresented = false
                 }
                 Button("Stash") {
-                    store.stash(message: message)
+                    store.stash(message: message, scope: scope)
                     isPresented = false
                 }
                 .buttonStyle(.borderedProminent)
-                .help("Stash tracked and untracked changes")
+                .help("Stash \(scope.title.lowercased())")
+                .disabled(store.isLoading)
             }
         }
         .padding(24)

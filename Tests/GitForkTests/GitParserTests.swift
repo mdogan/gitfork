@@ -542,6 +542,49 @@ struct GitParserTests {
     }
 
     @Test
+    func buildsExplicitNonForcePushAndNonPruningFetchArguments() {
+        let existingUpstream = GitPushTarget(
+            remote: "origin",
+            remoteRef: "refs/heads/main",
+            establishesUpstream: false
+        )
+        let firstPush = GitPushTarget(
+            remote: "backup",
+            remoteRef: "refs/heads/feature/safe-push",
+            establishesUpstream: true
+        )
+
+        #expect(
+            GitClient.pushArguments(for: existingUpstream)
+                == [
+                    "-c",
+                    "remote.origin.mirror=false",
+                    "push",
+                    "--no-force",
+                    "--no-follow-tags",
+                    "--",
+                    "origin",
+                    "HEAD:refs/heads/main"
+                ]
+        )
+        #expect(
+            GitClient.pushArguments(for: firstPush)
+                == [
+                    "-c",
+                    "remote.backup.mirror=false",
+                    "push",
+                    "--no-force",
+                    "--no-follow-tags",
+                    "--set-upstream",
+                    "--",
+                    "backup",
+                    "HEAD:refs/heads/feature/safe-push"
+                ]
+        )
+        #expect(GitClient.fetchArguments() == ["fetch", "--all"])
+    }
+
+    @Test
     func buildsSafeLocalReferenceDeletionArguments() throws {
         let branch = GitReference(
             name: "feature/sidebar-delete",
@@ -591,6 +634,25 @@ struct GitParserTests {
     @Test
     func buildsApplyAndDropStashArguments() {
         #expect(
+            GitClient.stashArguments(message: "staged", scope: .staged)
+                == ["stash", "push", "--staged", "-m", "staged"]
+        )
+        #expect(
+            GitClient.stashArguments(message: "unstaged", scope: .unstaged)
+                == [
+                    "stash",
+                    "push",
+                    "--keep-index",
+                    "--include-untracked",
+                    "-m",
+                    "unstaged"
+                ]
+        )
+        #expect(
+            GitClient.stashArguments(message: "all", scope: .all)
+                == ["stash", "push", "--include-untracked", "-m", "all"]
+        )
+        #expect(
             GitClient.applyStashArguments(selector: "stash@{2}")
                 == ["stash", "apply", "--index", "stash@{2}"]
         )
@@ -598,6 +660,322 @@ struct GitParserTests {
             GitClient.dropStashArguments(selector: "stash@{2}")
                 == ["stash", "drop", "stash@{2}"]
         )
+    }
+
+    @Test
+    func stashesStagedAndUnstagedScopesIndependently() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkStashScopeTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: container,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        func prepareRepository(named name: String) throws -> URL {
+            let root = container.appendingPathComponent(name)
+            try FileManager.default.createDirectory(
+                at: root,
+                withIntermediateDirectories: true
+            )
+            try runGit(["init", "-b", "main"], at: root)
+            try runGit(["config", "user.name", "GitFork Tests"], at: root)
+            try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+            try "base\n".write(
+                to: root.appendingPathComponent("staged.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try "base\n".write(
+                to: root.appendingPathComponent("unstaged.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try runGit(["add", "staged.txt", "unstaged.txt"], at: root)
+            try runGit(["commit", "-m", "Initial commit"], at: root)
+
+            try "staged\n".write(
+                to: root.appendingPathComponent("staged.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try runGit(["add", "staged.txt"], at: root)
+            try "unstaged\n".write(
+                to: root.appendingPathComponent("unstaged.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try "untracked\n".write(
+                to: root.appendingPathComponent("notes.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            return root
+        }
+
+        let client = GitClient()
+
+        let stagedRoot = try prepareRepository(named: "staged")
+        try await client.stash(
+            at: stagedRoot,
+            message: "staged only",
+            scope: .staged
+        )
+        let afterStaged = try await client.snapshot(at: stagedRoot)
+        #expect(!afterStaged.changes.contains { $0.path == "staged.txt" })
+        #expect(
+            afterStaged.changes.first { $0.path == "unstaged.txt" }?.isUnstaged
+                == true
+        )
+        #expect(
+            afterStaged.changes.first { $0.path == "notes.txt" }?.isUntracked
+                == true
+        )
+        #expect(afterStaged.stashes.count == 1)
+
+        let unstagedRoot = try prepareRepository(named: "unstaged")
+        try await client.stash(
+            at: unstagedRoot,
+            message: "unstaged only",
+            scope: .unstaged
+        )
+        let afterUnstaged = try await client.snapshot(at: unstagedRoot)
+        let remainingStaged = try #require(
+            afterUnstaged.changes.first { $0.path == "staged.txt" }
+        )
+        #expect(remainingStaged.isStaged)
+        #expect(!remainingStaged.isUnstaged)
+        #expect(!afterUnstaged.changes.contains { $0.path == "unstaged.txt" })
+        #expect(!afterUnstaged.changes.contains { $0.path == "notes.txt" })
+        #expect(afterUnstaged.stashes.count == 1)
+    }
+
+    @Test
+    func rejectsStagedOnlyStashBeforeMixedFileSideEffects() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkMixedStashTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let file = root.appendingPathComponent("mixed.txt")
+        try "one\ntwo\n".write(to: file, atomically: true, encoding: .utf8)
+        try runGit(["add", "mixed.txt"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        try "ONE\ntwo\n".write(to: file, atomically: true, encoding: .utf8)
+        try runGit(["add", "mixed.txt"], at: root)
+        try "ONE\nTWO\n".write(to: file, atomically: true, encoding: .utf8)
+
+        var rejected = false
+        do {
+            try await GitClient().stash(
+                at: root,
+                message: "unsafe staged stash",
+                scope: .staged
+            )
+        } catch is GitOperationError {
+            rejected = true
+        }
+
+        #expect(rejected)
+        let snapshot = try await GitClient().snapshot(at: root)
+        #expect(snapshot.stashes.isEmpty)
+        let mixedChange = try #require(
+            snapshot.changes.first { $0.path == "mixed.txt" }
+        )
+        #expect(mixedChange.isStaged)
+        #expect(mixedChange.isUnstaged)
+    }
+
+    @Test
+    func pushesOnlyToTheConfirmedUpstreamTarget() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkPushTargetTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("work")
+        let origin = container.appendingPathComponent("origin.git")
+        let backup = container.appendingPathComponent("backup.git")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "--bare", origin.path], at: container)
+        try runGit(["init", "--bare", backup.path], at: container)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(["remote", "add", "origin", origin.path], at: root)
+        try runGit(["remote", "add", "backup", backup.path], at: root)
+        try runGit(["push", "--set-upstream", "origin", "main"], at: root)
+        try runGit(["push", "backup", "main"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Next commit"], at: root)
+        try runGit(["config", "remote.pushDefault", "backup"], at: root)
+        try runGit(["config", "push.default", "current"], at: root)
+        try runGit(["config", "push.followTags", "true"], at: root)
+        try runGit(["config", "remote.origin.mirror", "true"], at: root)
+        try runGit(
+            ["config", "--add", "remote.origin.push", "+refs/heads/*:refs/heads/*"],
+            at: root
+        )
+        try runGit(["branch", "must-not-push"], at: root)
+        try runGit(["tag", "must-not-follow"], at: root)
+
+        let client = GitClient()
+        let snapshot = try await client.snapshot(at: root)
+        let target = try #require(snapshot.pushTarget)
+        #expect(target.displayName == "origin/main")
+
+        try await client.push(at: root, target: target)
+
+        let head = try runGitOutput(["rev-parse", "HEAD"], at: root)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let originHead = try runGitOutput(["rev-parse", "refs/heads/main"], at: origin)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let backupHead = try runGitOutput(["rev-parse", "refs/heads/main"], at: backup)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(originHead == head)
+        #expect(backupHead != head)
+        #expect(
+            try runGitOutput(["tag", "--list", "must-not-follow"], at: origin)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
+        #expect(
+            try runGitOutput(["branch", "--list", "must-not-push"], at: origin)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
+
+        try runGit(["switch", "-c", "feature/first-push"], at: root)
+        let firstPushSnapshot = try await client.snapshot(at: root)
+        let firstPushTarget = try #require(firstPushSnapshot.pushTarget)
+        #expect(firstPushTarget.displayName == "backup/feature/first-push")
+        #expect(firstPushTarget.establishesUpstream)
+        try await client.push(at: root, target: firstPushTarget)
+        #expect(
+            try runGitOutput(
+                ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+                at: root
+            )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                == "backup/feature/first-push"
+        )
+    }
+
+    @Test
+    func refusesToReuseLocalBranchTrackingAnotherRemote() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkRemoteCheckoutTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(
+            ["remote", "add", "origin", "https://example.invalid/origin.git"],
+            at: root
+        )
+        try runGit(
+            ["remote", "add", "upstream", "https://example.invalid/upstream.git"],
+            at: root
+        )
+        try runGit(["update-ref", "refs/remotes/origin/topic", "HEAD"], at: root)
+        try runGit(["update-ref", "refs/remotes/upstream/topic", "HEAD"], at: root)
+        try runGit(["branch", "topic"], at: root)
+        try runGit(
+            ["branch", "--set-upstream-to=upstream/topic", "topic"],
+            at: root
+        )
+
+        let reference = GitReference(
+            name: "origin/topic",
+            fullName: "refs/remotes/origin/topic",
+            kind: .remoteBranch,
+            target: try runGitOutput(["rev-parse", "HEAD"], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            isCurrent: false
+        )
+        var rejected = false
+        do {
+            try await GitClient().checkout(at: root, reference: reference)
+        } catch is GitOperationError {
+            rejected = true
+        }
+
+        #expect(rejected)
+        #expect(
+            try runGitOutput(["branch", "--show-current"], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                == "main"
+        )
+
+        try runGit(
+            ["branch", "--set-upstream-to=origin/topic", "topic"],
+            at: root
+        )
+        try await GitClient().checkout(at: root, reference: reference)
+        #expect(
+            try runGitOutput(["branch", "--show-current"], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                == "topic"
+        )
+
+        try runGit(["switch", "main"], at: root)
+        try runGit(["update-ref", "refs/remotes/origin/new-topic", "HEAD"], at: root)
+        let newReference = GitReference(
+            name: "origin/new-topic",
+            fullName: "refs/remotes/origin/new-topic",
+            kind: .remoteBranch,
+            target: reference.target,
+            isCurrent: false
+        )
+        try await GitClient().checkout(at: root, reference: newReference)
+        #expect(
+            try runGitOutput(["branch", "--show-current"], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                == "new-topic"
+        )
+        #expect(
+            try runGitOutput(
+                ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+                at: root
+            )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                == "origin/new-topic"
+        )
+    }
+
+    @Test
+    @MainActor
+    func serializesRepositoryOperationsAtTheStoreBoundary() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkOperationTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+
+        let store = RepositoryStore()
+        store.openRepository(root)
+        store.openRepository(root)
+
+        #expect(store.errorMessage?.contains("Wait for Opening repository") == true)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!store.isLoading)
+        #expect(store.repositoryURL?.standardizedFileURL == root.standardizedFileURL)
     }
 
     @Test

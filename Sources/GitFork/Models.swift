@@ -121,6 +121,47 @@ struct GitStash: Identifiable, Hashable, Sendable {
     }
 }
 
+struct GitPushTarget: Hashable, Sendable {
+    let remote: String
+    let remoteRef: String
+    let establishesUpstream: Bool
+
+    var branchName: String {
+        remoteRef.hasPrefix("refs/heads/")
+            ? String(remoteRef.dropFirst("refs/heads/".count))
+            : remoteRef
+    }
+
+    var displayName: String {
+        "\(remote)/\(branchName)"
+    }
+}
+
+enum StashScope: String, Sendable {
+    case staged
+    case unstaged
+    case all
+
+    var title: String {
+        switch self {
+        case .staged: "Staged Changes"
+        case .unstaged: "Unstaged Changes"
+        case .all: "All Changes"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .staged:
+            "Only staged changes will be saved. Unstaged and untracked changes will remain."
+        case .unstaged:
+            "Unstaged and untracked changes will be saved. Staged changes will remain."
+        case .all:
+            "Staged, unstaged, and untracked changes will be saved."
+        }
+    }
+}
+
 struct GitWorktree: Identifiable, Hashable, Sendable {
     let path: String
     let head: String?
@@ -270,6 +311,7 @@ struct RepositorySnapshot: Sendable {
     let root: URL
     let branch: String
     let upstream: String?
+    let pushTarget: GitPushTarget?
     let ahead: Int
     let behind: Int
     let changes: [WorkingChange]

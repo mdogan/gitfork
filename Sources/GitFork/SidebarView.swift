@@ -181,12 +181,14 @@ private struct StashSidebarRow: View {
             } label: {
                 Label("Apply Stash", systemImage: "arrow.uturn.backward")
             }
+            .disabled(store.isLoading)
 
             Button(role: .destructive) {
                 confirm(.drop)
             } label: {
                 Label("Drop Stash", systemImage: "trash")
             }
+            .disabled(store.isLoading)
         }
         .confirmationDialog(
             confirmationTitle,
@@ -313,6 +315,7 @@ private struct ReferenceSidebarRow: View {
             Button(reference.kind == .tag ? "Checkout Detached" : "Checkout") {
                 store.checkout(reference)
             }
+            .disabled(store.isLoading)
 
             if reference.kind != .remoteBranch {
                 Divider()
@@ -321,7 +324,7 @@ private struct ReferenceSidebarRow: View {
                 } label: {
                     Label(deleteActionTitle, systemImage: "trash")
                 }
-                .disabled(reference.isCurrent)
+                .disabled(reference.isCurrent || store.isLoading)
             }
         }
         .confirmationDialog(

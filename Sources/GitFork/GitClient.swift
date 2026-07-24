@@ -68,15 +68,22 @@ struct GitClient: Sendable {
         let commits = try await history
         let upstreamCommand = try await upstreamResult
         let countsCommand = try await countsResult
+        let upstream = upstreamCommand.exitCode == 0
+            ? upstreamCommand.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            : nil
+        let pushTarget = try await resolvePushTarget(
+            at: root,
+            branch: branch,
+            hasUpstream: upstream != nil
+        )
 
         let counts = countsCommand.output.split(whereSeparator: \.isWhitespace).compactMap { Int($0) }
 
         return RepositorySnapshot(
             root: root,
             branch: branch,
-            upstream: upstreamCommand.exitCode == 0
-                ? upstreamCommand.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                : nil,
+            upstream: upstream,
+            pushTarget: pushTarget,
             ahead: counts.first ?? 0,
             behind: counts.dropFirst().first ?? 0,
             changes: GitParser.parseStatus(Data(status.output.utf8)),
@@ -421,49 +428,78 @@ struct GitClient: Sendable {
     }
 
     func fetch(at root: URL) async throws {
-        _ = try await run(["fetch", "--all", "--prune"], in: root)
+        _ = try await run(Self.fetchArguments(), in: root)
+    }
+
+    static func fetchArguments() -> [String] {
+        ["fetch", "--all"]
     }
 
     func pull(at root: URL) async throws {
         _ = try await run(["pull", "--ff-only"], in: root)
     }
 
-    func push(at root: URL, branch: String, upstream: String?) async throws {
-        if upstream != nil {
-            _ = try await run(["push"], in: root)
-            return
-        }
-
-        let remotes = try await run(["remote"], in: root).output
-            .split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-        guard let remote = remotes.first else {
+    func push(at root: URL, target: GitPushTarget?) async throws {
+        guard let target else {
             throw GitOperationError(
                 command: "git push",
-                message: "This repository has no remotes. Add a remote before pushing."
-            )
-        }
-        guard !branch.hasPrefix("Detached at ") else {
-            throw GitOperationError(
-                command: "git push",
-                message: "Create or check out a branch before pushing a detached HEAD."
+                message: "GitFork could not resolve a safe push target for the current branch."
             )
         }
 
-        _ = try await run(["push", "--set-upstream", remote, branch], in: root)
+        _ = try await run(Self.pushArguments(for: target), in: root)
+    }
+
+    static func pushArguments(for target: GitPushTarget) -> [String] {
+        var arguments = [
+            "-c",
+            "remote.\(target.remote).mirror=false",
+            "push",
+            "--no-force",
+            "--no-follow-tags"
+        ]
+        if target.establishesUpstream {
+            arguments.append("--set-upstream")
+        }
+        arguments += ["--", target.remote, "HEAD:\(target.remoteRef)"]
+        return arguments
     }
 
     func checkout(at root: URL, reference: GitReference) async throws {
         if reference.kind == .remoteBranch {
             let localName = reference.name.split(separator: "/").dropFirst().joined(separator: "/")
-            let attempt = try await runAllowingFailure(["switch", localName], in: root)
-            if attempt.exitCode != 0 {
-                _ = try await run(["switch", "--track", "-c", localName, reference.name], in: root)
+            let localRef = "refs/heads/\(localName)"
+            let existing = try await runAllowingFailure(
+                ["show-ref", "--verify", "--quiet", localRef],
+                in: root
+            )
+            if existing.exitCode == 0 {
+                let upstream = try await runAllowingFailure(
+                    ["for-each-ref", "--format=%(upstream)", localRef],
+                    in: root
+                )
+                let configuredUpstream = upstream.output
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard configuredUpstream == reference.fullName else {
+                    throw GitOperationError(
+                        command: "git switch \(localName)",
+                        message: """
+                        Local branch '\(localName)' already exists but does not track \
+                        \(reference.name). Rename or remove it before checking out this remote branch.
+                        """
+                    )
+                }
+                _ = try await run(["switch", "--", localName], in: root)
+            } else {
+                _ = try await run(
+                    ["switch", "--track", "-c", localName, "--", reference.fullName],
+                    in: root
+                )
             }
         } else if reference.kind == .localBranch {
-            _ = try await run(["switch", reference.name], in: root)
+            _ = try await run(["switch", "--", reference.name], in: root)
         } else {
-            _ = try await run(["switch", "--detach", reference.name], in: root)
+            _ = try await run(["switch", "--detach", "--", reference.fullName], in: root)
         }
     }
 
@@ -498,8 +534,48 @@ struct GitClient: Sendable {
         }
     }
 
-    func stash(at root: URL, message: String) async throws {
-        _ = try await run(["stash", "push", "--include-untracked", "-m", message], in: root)
+    func stash(
+        at root: URL,
+        message: String,
+        scope: StashScope = .all
+    ) async throws {
+        if scope == .staged {
+            let status = try await run(
+                ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                in: root
+            )
+            let hasPartiallyStagedFile = GitParser.parseStatus(Data(status.output.utf8))
+                .contains { $0.isStaged && $0.isUnstaged }
+            guard !hasPartiallyStagedFile else {
+                throw GitOperationError(
+                    command: "git stash push --staged",
+                    message: """
+                    Staged-only stash is unavailable while a file has both staged and \
+                    unstaged changes. Separate those hunks first so Git cannot create \
+                    a stash and then fail while cleaning the working tree.
+                    """
+                )
+            }
+        }
+
+        _ = try await run(
+            Self.stashArguments(message: message, scope: scope),
+            in: root
+        )
+    }
+
+    static func stashArguments(message: String, scope: StashScope) -> [String] {
+        var arguments = ["stash", "push"]
+        switch scope {
+        case .staged:
+            arguments.append("--staged")
+        case .unstaged:
+            arguments += ["--keep-index", "--include-untracked"]
+        case .all:
+            arguments.append("--include-untracked")
+        }
+        arguments += ["-m", message]
+        return arguments
     }
 
     func applyStash(at root: URL, stash: GitStash) async throws {
@@ -522,6 +598,53 @@ struct GitClient: Sendable {
 
     static func dropStashArguments(selector: String) -> [String] {
         ["stash", "drop", selector]
+    }
+
+    private func resolvePushTarget(
+        at root: URL,
+        branch: String,
+        hasUpstream: Bool
+    ) async throws -> GitPushTarget? {
+        guard !branch.hasPrefix("Detached at ") else { return nil }
+
+        if hasUpstream {
+            async let remoteResult = runAllowingFailure(
+                ["config", "--get", "branch.\(branch).remote"],
+                in: root
+            )
+            async let mergeResult = runAllowingFailure(
+                ["config", "--get", "branch.\(branch).merge"],
+                in: root
+            )
+            let remoteCommand = try await remoteResult
+            let mergeCommand = try await mergeResult
+            let remote = remoteCommand.output
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let remoteRef = mergeCommand.output
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard remoteCommand.exitCode == 0,
+                  mergeCommand.exitCode == 0,
+                  !remote.isEmpty,
+                  remote != ".",
+                  remoteRef.hasPrefix("refs/heads/") else {
+                return nil
+            }
+            return GitPushTarget(
+                remote: remote,
+                remoteRef: remoteRef,
+                establishesUpstream: false
+            )
+        }
+
+        let remotes = try await run(["remote"], in: root).output
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        guard let remote = remotes.first else { return nil }
+        return GitPushTarget(
+            remote: remote,
+            remoteRef: "refs/heads/\(branch)",
+            establishesUpstream: true
+        )
     }
 
     private func apply(

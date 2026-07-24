@@ -40,11 +40,11 @@ struct GitForkApp: App {
                     .disabled(store.repositoryURL == nil)
                 Divider()
                 Button("Fetch All") { store.fetch() }
-                    .disabled(store.repositoryURL == nil)
+                    .disabled(store.repositoryURL == nil || store.isLoading)
                 Button("Pull") { store.pull() }
-                    .disabled(store.repositoryURL == nil)
-                Button("Push") { store.push() }
-                    .disabled(store.repositoryURL == nil)
+                    .disabled(store.repositoryURL == nil || store.isLoading)
+                Button("Push") { store.requestPushConfirmation() }
+                    .disabled(store.repositoryURL == nil || store.isLoading)
             }
         }
 

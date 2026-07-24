@@ -96,20 +96,7 @@ struct SidebarView: View {
                     EmptySidebarRow(title: "No Stashes")
                 } else {
                     ForEach(store.stashes) { stash in
-                        SidebarRow(
-                            title: stash.displayName,
-                            icon: "archivebox",
-                            isSelected: store.selectedStash == stash
-                        ) {
-                            store.selectStash(stash)
-                        } badge: {
-                            EmptyView()
-                        }
-                        .contextMenu {
-                            Button("Show Stash") {
-                                store.selectStash(stash)
-                            }
-                        }
+                        StashSidebarRow(stash: stash)
                     }
                 }
             } header: {
@@ -160,6 +147,101 @@ struct SidebarView: View {
     }
 }
 
+private struct StashSidebarRow: View {
+    private enum Action: Equatable {
+        case apply
+        case drop
+    }
+
+    @EnvironmentObject private var store: RepositoryStore
+    @State private var pendingAction: Action?
+    @State private var isConfirmingAction = false
+
+    let stash: GitStash
+
+    var body: some View {
+        SidebarRow(
+            title: stash.displayName,
+            icon: "archivebox",
+            isSelected: store.selectedStash == stash
+        ) {
+            store.selectStash(stash)
+        } badge: {
+            EmptyView()
+        }
+        .contextMenu {
+            Button("Show Stash") {
+                store.selectStash(stash)
+            }
+
+            Divider()
+
+            Button {
+                confirm(.apply)
+            } label: {
+                Label("Apply Stash", systemImage: "arrow.uturn.backward")
+            }
+
+            Button(role: .destructive) {
+                confirm(.drop)
+            } label: {
+                Label("Drop Stash", systemImage: "trash")
+            }
+        }
+        .confirmationDialog(
+            confirmationTitle,
+            isPresented: $isConfirmingAction,
+            titleVisibility: .visible
+        ) {
+            if pendingAction == .apply {
+                Button("Apply Stash") {
+                    store.apply(stash)
+                }
+            } else if pendingAction == .drop {
+                Button("Drop Stash", role: .destructive) {
+                    store.drop(stash)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(confirmationMessage)
+        }
+    }
+
+    private var confirmationTitle: String {
+        switch pendingAction {
+        case .apply:
+            "Apply “\(stash.displayName)”?"
+        case .drop:
+            "Drop “\(stash.displayName)”?"
+        case nil:
+            "Confirm Stash Action"
+        }
+    }
+
+    private var confirmationMessage: String {
+        switch pendingAction {
+        case .apply:
+            """
+            This applies the stashed changes and restores their staged state. \
+            The stash will remain available. Existing changes may cause conflicts.
+            """
+        case .drop:
+            """
+            This permanently removes the stash without applying its changes. \
+            This action cannot be undone.
+            """
+        case nil:
+            ""
+        }
+    }
+
+    private func confirm(_ action: Action) {
+        pendingAction = action
+        isConfirmingAction = true
+    }
+}
+
 private struct SidebarSectionHeader: View {
     let title: String
     @Binding var isExpanded: Bool
@@ -206,6 +288,7 @@ private struct ReferenceTreeRows: View {
 
 private struct ReferenceSidebarRow: View {
     @EnvironmentObject private var store: RepositoryStore
+    @State private var isConfirmingDelete = false
 
     let reference: GitReference
     let title: String
@@ -230,7 +313,44 @@ private struct ReferenceSidebarRow: View {
             Button(reference.kind == .tag ? "Checkout Detached" : "Checkout") {
                 store.checkout(reference)
             }
+
+            if reference.kind != .remoteBranch {
+                Divider()
+                Button(role: .destructive) {
+                    isConfirmingDelete = true
+                } label: {
+                    Label(deleteActionTitle, systemImage: "trash")
+                }
+                .disabled(reference.isCurrent)
+            }
         }
+        .confirmationDialog(
+            deleteConfirmationTitle,
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button(deleteActionTitle, role: .destructive) {
+                store.delete(reference)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(deleteConfirmationMessage)
+        }
+    }
+
+    private var deleteActionTitle: String {
+        reference.kind == .tag ? "Delete Tag" : "Delete Branch"
+    }
+
+    private var deleteConfirmationTitle: String {
+        "\(deleteActionTitle) “\(reference.name)”?"
+    }
+
+    private var deleteConfirmationMessage: String {
+        if reference.kind == .tag {
+            return "This deletes the local tag. It does not delete the tag from any remote."
+        }
+        return "This deletes the local branch. Git will refuse if it contains unmerged commits."
     }
 }
 

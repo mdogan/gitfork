@@ -542,6 +542,173 @@ struct GitParserTests {
     }
 
     @Test
+    func buildsSafeLocalReferenceDeletionArguments() throws {
+        let branch = GitReference(
+            name: "feature/sidebar-delete",
+            fullName: "refs/heads/feature/sidebar-delete",
+            kind: .localBranch,
+            target: "abcdef",
+            isCurrent: false
+        )
+        let tag = GitReference(
+            name: "v1.0",
+            fullName: "refs/tags/v1.0",
+            kind: .tag,
+            target: "abcdef",
+            isCurrent: false
+        )
+        let currentBranch = GitReference(
+            name: "main",
+            fullName: "refs/heads/main",
+            kind: .localBranch,
+            target: "abcdef",
+            isCurrent: true
+        )
+        let remoteBranch = GitReference(
+            name: "origin/main",
+            fullName: "refs/remotes/origin/main",
+            kind: .remoteBranch,
+            target: "abcdef",
+            isCurrent: false
+        )
+
+        #expect(
+            try GitClient.deleteArguments(for: branch)
+                == ["branch", "--delete", "--", "feature/sidebar-delete"]
+        )
+        #expect(
+            try GitClient.deleteArguments(for: tag)
+                == ["tag", "--delete", "--", "v1.0"]
+        )
+        #expect(throws: GitOperationError.self) {
+            try GitClient.deleteArguments(for: currentBranch)
+        }
+        #expect(throws: GitOperationError.self) {
+            try GitClient.deleteArguments(for: remoteBranch)
+        }
+    }
+
+    @Test
+    func buildsApplyAndDropStashArguments() {
+        #expect(
+            GitClient.applyStashArguments(selector: "stash@{2}")
+                == ["stash", "apply", "--index", "stash@{2}"]
+        )
+        #expect(
+            GitClient.dropStashArguments(selector: "stash@{2}")
+                == ["stash", "drop", "stash@{2}"]
+        )
+    }
+
+    @Test
+    func appliesAStashWithoutRemovingItThenDropsIt() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkStashActionTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        let untracked = root.appendingPathComponent("notes.txt")
+        try "one\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        try "two\n".write(to: readme, atomically: true, encoding: .utf8)
+        try "untracked\n".write(to: untracked, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+
+        let client = GitClient()
+        try await client.stash(at: root, message: "stash actions")
+        var snapshot = try await client.snapshot(at: root)
+        let stash = try #require(snapshot.stashes.first)
+
+        #expect(
+            try String(contentsOf: readme, encoding: .utf8) == "one\n"
+        )
+        #expect(!FileManager.default.fileExists(atPath: untracked.path))
+
+        try await client.applyStash(at: root, stash: stash)
+
+        #expect(
+            try String(contentsOf: readme, encoding: .utf8) == "two\n"
+        )
+        #expect(FileManager.default.fileExists(atPath: untracked.path))
+        #expect(
+            try runGitOutput(["diff", "--cached", "--", "README.md"], at: root)
+                .contains("+two")
+        )
+
+        snapshot = try await client.snapshot(at: root)
+        #expect(snapshot.stashes.map(\.id).contains(stash.id))
+
+        try await client.dropStash(at: root, stash: stash)
+        snapshot = try await client.snapshot(at: root)
+        #expect(snapshot.stashes.isEmpty)
+    }
+
+    @Test
+    func deletesMergedLocalBranchesAndLocalTags() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkDeleteReferenceTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "# Delete references\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try runGit(["branch", "feature/delete-me"], at: root)
+        try runGit(["tag", "v-delete-me"], at: root)
+
+        let client = GitClient()
+        try await client.delete(
+            at: root,
+            reference: GitReference(
+                name: "feature/delete-me",
+                fullName: "refs/heads/feature/delete-me",
+                kind: .localBranch,
+                target: "abcdef",
+                isCurrent: false
+            )
+        )
+        try await client.delete(
+            at: root,
+            reference: GitReference(
+                name: "v-delete-me",
+                fullName: "refs/tags/v-delete-me",
+                kind: .tag,
+                target: "abcdef",
+                isCurrent: false
+            )
+        )
+
+        #expect(
+            try runGitOutput(
+                ["branch", "--list", "feature/delete-me"],
+                at: root
+            )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
+        #expect(
+            try runGitOutput(
+                ["tag", "--list", "v-delete-me"],
+                at: root
+            )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
+    }
+
+    @Test
     func resolvesExecutablesFromAugmentedGUIPath() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitForkGPGTests-\(UUID().uuidString)")

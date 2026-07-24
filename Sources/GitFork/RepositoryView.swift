@@ -5,6 +5,7 @@ struct RepositoryView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showingBranchSheet = false
     @State private var showingStashSheet = false
+    @State private var isConfirmingPush = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -26,7 +27,8 @@ struct RepositoryView: View {
         .toolbar {
             RepositoryToolbar(
                 showingBranchSheet: $showingBranchSheet,
-                showingStashSheet: $showingStashSheet
+                showingStashSheet: $showingStashSheet,
+                isConfirmingPush: $isConfirmingPush
             )
         }
         .sheet(isPresented: $showingBranchSheet) {
@@ -34,6 +36,14 @@ struct RepositoryView: View {
         }
         .sheet(isPresented: $showingStashSheet) {
             StashSheet(isPresented: $showingStashSheet)
+        }
+        .alert("Push \(store.branch)?", isPresented: $isConfirmingPush) {
+            Button("Cancel", role: .cancel) {}
+            Button("Push") {
+                store.push()
+            }
+        } message: {
+            Text(pushConfirmationMessage)
         }
         .overlay(alignment: .bottom) {
             if let label = store.operationLabel {
@@ -55,12 +65,28 @@ struct RepositoryView: View {
         .animation(.snappy, value: store.operationLabel)
         .navigationTitle(store.repositoryName)
     }
+
+    private var pushConfirmationMessage: String {
+        let summary: String
+        if store.ahead > 0 {
+            let plural = store.ahead == 1 ? "commit" : "commits"
+            summary = "\(store.ahead) \(plural) from \(store.branch)"
+        } else {
+            summary = store.branch
+        }
+
+        if let upstream = store.upstream {
+            return "This will push \(summary) to \(upstream)."
+        }
+        return "This will push \(summary) to the remote and set it as the upstream branch."
+    }
 }
 
 struct RepositoryToolbar: ToolbarContent {
     @EnvironmentObject private var store: RepositoryStore
     @Binding var showingBranchSheet: Bool
     @Binding var showingStashSheet: Bool
+    @Binding var isConfirmingPush: Bool
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
@@ -85,7 +111,7 @@ struct RepositoryToolbar: ToolbarContent {
             .disabled(store.isLoading)
 
             Button {
-                store.push()
+                isConfirmingPush = true
             } label: {
                 Label("Push", systemImage: "arrow.up.to.line")
             }

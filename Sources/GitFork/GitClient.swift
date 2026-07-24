@@ -471,8 +471,57 @@ struct GitClient: Sendable {
         _ = try await run(["switch", "-c", name], in: root)
     }
 
+    func delete(at root: URL, reference: GitReference) async throws {
+        _ = try await run(
+            Self.deleteArguments(for: reference),
+            in: root
+        )
+    }
+
+    static func deleteArguments(for reference: GitReference) throws -> [String] {
+        switch reference.kind {
+        case .localBranch:
+            guard !reference.isCurrent else {
+                throw GitOperationError(
+                    command: "git branch --delete",
+                    message: "Check out another branch before deleting \(reference.name)."
+                )
+            }
+            return ["branch", "--delete", "--", reference.name]
+        case .tag:
+            return ["tag", "--delete", "--", reference.name]
+        case .remoteBranch:
+            throw GitOperationError(
+                command: "git branch --delete",
+                message: "Deleting remote branches is not supported."
+            )
+        }
+    }
+
     func stash(at root: URL, message: String) async throws {
         _ = try await run(["stash", "push", "--include-untracked", "-m", message], in: root)
+    }
+
+    func applyStash(at root: URL, stash: GitStash) async throws {
+        _ = try await run(
+            Self.applyStashArguments(selector: stash.selector),
+            in: root
+        )
+    }
+
+    static func applyStashArguments(selector: String) -> [String] {
+        ["stash", "apply", "--index", selector]
+    }
+
+    func dropStash(at root: URL, stash: GitStash) async throws {
+        _ = try await run(
+            Self.dropStashArguments(selector: stash.selector),
+            in: root
+        )
+    }
+
+    static func dropStashArguments(selector: String) -> [String] {
+        ["stash", "drop", selector]
     }
 
     private func apply(

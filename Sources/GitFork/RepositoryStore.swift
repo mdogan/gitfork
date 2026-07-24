@@ -333,6 +333,16 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func delete(_ reference: GitReference) {
+        let kind = reference.kind == .tag ? "tag" : "branch"
+        mutate("Deleting \(kind) \(reference.name)") { root in
+            try await self.client.delete(at: root, reference: reference)
+            if self.selectedReference == reference {
+                self.selectedReference = nil
+            }
+        }
+    }
+
     func stash(message: String) {
         mutate("Stashing changes") { root in
             let resolved = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -340,6 +350,21 @@ final class RepositoryStore: ObservableObject {
                 at: root,
                 message: resolved.isEmpty ? "GitFork stash" : resolved
             )
+        }
+    }
+
+    func apply(_ stash: GitStash) {
+        mutate("Applying \(stash.displayName)") { root in
+            try await self.client.applyStash(at: root, stash: stash)
+        }
+    }
+
+    func drop(_ stash: GitStash) {
+        mutate("Dropping \(stash.displayName)") { root in
+            try await self.client.dropStash(at: root, stash: stash)
+            if self.selectedStash == stash {
+                self.selectedStash = nil
+            }
         }
     }
 

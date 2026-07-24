@@ -34,8 +34,11 @@ final class RepositoryStore: ObservableObject {
 
     private let client = GitClient()
     private var loadGeneration = 0
+    private var monitorTask: Task<Void, Never>?
+    private var monitoredState: RepositoryStateToken?
     private let recentKey = "recentRepositories"
     private static let signCommitKey = "signCommitsWithGPG"
+    private static let monitorInterval: Duration = .seconds(2)
 
     init() {
         signCommit = UserDefaults.standard.bool(forKey: Self.signCommitKey)
@@ -90,11 +93,13 @@ final class RepositoryStore: ObservableObject {
         Task {
             await perform("Opening repository") {
                 let root = try await self.client.repositoryRoot(from: url)
+                self.stopMonitoring()
                 self.repositoryURL = root
                 self.remember(root)
                 self.selectedReference = nil
                 self.selectedSection = .history
                 try await self.reload(root: root)
+                self.startMonitoring(root: root)
             }
         }
     }
@@ -282,6 +287,52 @@ final class RepositoryStore: ObservableObject {
                 try await action(root)
                 try await self.reload(root: root, revision: self.selectedReference?.fullName)
             }
+        }
+    }
+
+    private func startMonitoring(root: URL) {
+        stopMonitoring()
+        monitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: Self.monitorInterval)
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                await self.refreshIfRepositoryChanged(root: root)
+            }
+        }
+    }
+
+    private func stopMonitoring() {
+        monitorTask?.cancel()
+        monitorTask = nil
+        monitoredState = nil
+    }
+
+    private func refreshIfRepositoryChanged(root: URL) async {
+        guard repositoryURL?.standardizedFileURL == root.standardizedFileURL,
+              !isLoading else {
+            return
+        }
+
+        do {
+            let state = try await client.stateToken(at: root)
+            guard !Task.isCancelled,
+                  repositoryURL?.standardizedFileURL == root.standardizedFileURL,
+                  !isLoading,
+                  monitoredState != state else {
+                return
+            }
+
+            isLoading = true
+            defer { isLoading = false }
+            try await reload(root: root, revision: selectedReference?.fullName)
+            monitoredState = state
+        } catch {
+            // External Git operations can leave short-lived lock or ref states.
+            // The next polling pass retries without interrupting the user.
         }
     }
 

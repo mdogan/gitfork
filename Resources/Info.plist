@@ -8,6 +8,8 @@
     <string>GitFork</string>
     <key>CFBundleExecutable</key>
     <string>GitFork</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>io.dogan.gitfork</string>
     <key>CFBundleInfoDictionaryVersion</key>

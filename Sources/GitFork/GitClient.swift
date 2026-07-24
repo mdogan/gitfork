@@ -1,5 +1,12 @@
 import Foundation
 
+struct RepositoryStateToken: Equatable, Sendable {
+    let status: String
+    let stagedDiff: String
+    let references: String
+    let workingTreeMetadata: String
+}
+
 struct GitClient: Sendable {
     private let gitURL = URL(fileURLWithPath: "/usr/bin/git")
 
@@ -65,6 +72,40 @@ struct GitClient: Sendable {
         )
     }
 
+    func stateToken(at root: URL) async throws -> RepositoryStateToken {
+        async let statusResult = run([
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "--branch",
+            "-z",
+            "--untracked-files=all"
+        ], in: root)
+        async let stagedDiffResult = run([
+            "diff",
+            "--cached",
+            "--raw",
+            "--no-renames",
+            "--no-ext-diff"
+        ], in: root)
+        async let referencesResult = run([
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)",
+            "refs/heads", "refs/remotes", "refs/tags"
+        ], in: root)
+
+        let status = try await statusResult
+        let stagedDiff = try await stagedDiffResult
+        let references = try await referencesResult
+
+        return RepositoryStateToken(
+            status: status.output,
+            stagedDiff: stagedDiff.output,
+            references: references.output,
+            workingTreeMetadata: workingTreeMetadata(from: status.output, at: root)
+        )
+    }
+
     func diff(at root: URL, change: WorkingChange, staged: Bool) async throws -> String {
         var arguments = ["diff", "--no-ext-diff", "--no-color"]
         if staged {
@@ -85,6 +126,26 @@ struct GitClient: Sendable {
                 .joined(separator: "\n")
         }
         return result.output.isEmpty ? "No textual changes." : result.output
+    }
+
+    private func workingTreeMetadata(from status: String, at root: URL) -> String {
+        let changes = GitParser.parseStatus(Data(status.utf8))
+            .filter { $0.indexStatus != "#" }
+        let fileManager = FileManager.default
+
+        return changes.map { change in
+            let attributes = try? fileManager.attributesOfItem(
+                atPath: root.appendingPathComponent(change.path).path
+            )
+            let size = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+            let modificationDate = attributes?[.modificationDate] as? Date
+            let modificationBits = modificationDate?
+                .timeIntervalSinceReferenceDate.bitPattern ?? 0
+            let fileIdentifier = (attributes?[.systemFileNumber] as? NSNumber)?
+                .uint64Value ?? 0
+            return "\(change.path)\u{1f}\(size)\u{1f}\(modificationBits)\u{1f}\(fileIdentifier)"
+        }
+        .joined(separator: "\u{1e}")
     }
 
     func commitDetails(at root: URL, hash: String) async throws -> String {

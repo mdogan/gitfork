@@ -101,6 +101,38 @@ struct GitParserTests {
     }
 
     @Test
+    func repositoryStateTokenDetectsEditsAndNewBranches() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkMonitorTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "one\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        let client = GitClient()
+        let clean = try await client.stateToken(at: root)
+
+        try "two\n".write(to: readme, atomically: true, encoding: .utf8)
+        let edited = try await client.stateToken(at: root)
+        #expect(edited != clean)
+
+        try "six\n".write(to: readme, atomically: true, encoding: .utf8)
+        let editedAgain = try await client.stateToken(at: root)
+        #expect(editedAgain != edited)
+
+        try runGit(["branch", "feature/live-refresh"], at: root)
+        let withBranch = try await client.stateToken(at: root)
+        #expect(withBranch != editedAgain)
+    }
+
+    @Test
     func parsesRepositoryOpenURL() throws {
         let url = try #require(
             URL(string: "gitfork://open?path=%2Ftmp%2FA%20Repository")

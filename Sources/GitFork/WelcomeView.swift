@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct WelcomeView: View {
@@ -7,22 +8,7 @@ struct WelcomeView: View {
         VStack(spacing: 0) {
             Spacer()
 
-            ZStack {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [GitForkTheme.accent, Color(red: 0.98, green: 0.70, blue: 0.24)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 104, height: 104)
-                    .shadow(color: GitForkTheme.accent.opacity(0.25), radius: 18, y: 10)
-
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 50, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
+            GitForkLogoView()
 
             Text("GitFork")
                 .font(.system(size: 34, weight: .bold, design: .rounded))
@@ -111,5 +97,49 @@ struct WelcomeView: View {
                 .help("Choose a local Git repository")
             }
         }
+    }
+}
+
+private struct GitForkLogoView: View {
+    private static let bundledIcon: NSImage? = {
+        guard let iconURL = Bundle.main.url(
+            forResource: "AppIcon",
+            withExtension: "icns"
+        ) else {
+            return nil
+        }
+        return NSImage(contentsOf: iconURL)
+    }()
+
+    var body: some View {
+        Group {
+            if let icon = Self.bundledIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    GitForkTheme.accent,
+                                    Color(red: 0.98, green: 0.70, blue: 0.24)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 50, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .padding(12)
+            }
+        }
+        .frame(width: 128, height: 128)
+        .shadow(color: .black.opacity(0.18), radius: 16, y: 10)
+        .accessibilityHidden(true)
     }
 }

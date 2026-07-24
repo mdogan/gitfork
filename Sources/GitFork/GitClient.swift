@@ -11,8 +11,10 @@ struct RepositoryStateToken: Equatable, Sendable {
 
 struct GitClient: Sendable {
     private let gitURL = URL(fileURLWithPath: "/usr/bin/git")
-    private static let commitFormat =
+    private static let verifiedCommitFormat =
         "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%G?%x1f%GK%x1f%GS%x1f%GG%x1f%s%x1e"
+    private static let unverifiedCommitFormat =
+        "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1fN%x1f%x1f%x1f%x1f%s%x1e"
 
     func repositoryRoot(from directory: URL) async throws -> URL {
         let result = try await run(["rev-parse", "--show-toplevel"], in: directory)
@@ -39,13 +41,7 @@ struct GitClient: Sendable {
             "--porcelain",
             "-z"
         ], in: root)
-        async let logResult = run([
-            "log",
-            "--max-count=300",
-            "--date=iso-strict",
-            "--pretty=format:\(Self.commitFormat)",
-            revision ?? "--all"
-        ], in: root)
+        async let history = commits(at: root, revision: revision)
 
         let branchCommand = try await branchResult
         let branch: String
@@ -69,7 +65,7 @@ struct GitClient: Sendable {
         let refs = try await refsResult
         let stashes = try await stashResult
         let worktrees = try await worktreeResult
-        let log = try await logResult
+        let commits = try await history
         let upstreamCommand = try await upstreamResult
         let countsCommand = try await countsResult
 
@@ -87,8 +83,26 @@ struct GitClient: Sendable {
             references: GitParser.parseReferences(refs.output, currentBranch: branch),
             stashes: GitParser.parseStashes(stashes.output),
             worktrees: GitParser.parseWorktrees(worktrees.output, currentRoot: root),
-            commits: GitParser.parseCommits(log.output)
+            commits: commits
         )
+    }
+
+    private func commits(at root: URL, revision: String? = nil) async throws -> [GitCommit] {
+        let result = try await run(
+            Self.historyArguments(revision: revision),
+            in: root
+        )
+        return GitParser.parseCommits(result.output)
+    }
+
+    static func historyArguments(revision: String?) -> [String] {
+        [
+            "log",
+            "--max-count=300",
+            "--date=iso-strict",
+            "--pretty=format:\(unverifiedCommitFormat)",
+            revision ?? "--all"
+        ]
     }
 
     func stateToken(at root: URL) async throws -> RepositoryStateToken {
@@ -210,7 +224,7 @@ struct GitClient: Sendable {
             "log",
             "--max-count=1",
             "--date=iso-strict",
-            "--pretty=format:\(Self.commitFormat)",
+            "--pretty=format:\(Self.verifiedCommitFormat)",
             revision
         ], in: root)
         guard let commit = GitParser.parseCommits(result.output).first else {

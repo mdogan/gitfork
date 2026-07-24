@@ -37,8 +37,10 @@ final class RepositoryStore: ObservableObject {
 
     private let client = GitClient()
     private var loadGeneration = 0
+    private var openTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var monitoredState: RepositoryStateToken?
+    private var activeOperationID: UUID?
     private let recentKey = "recentRepositories"
     private static let signCommitKey = "signCommitsWithGPG"
     private static let monitorInterval: Duration = .seconds(2)
@@ -87,16 +89,18 @@ final class RepositoryStore: ObservableObject {
     }
 
     func openRepository(_ url: URL) {
-        Task {
+        openTask?.cancel()
+        openTask = Task {
             await perform("Opening repository") {
                 let root = try await self.client.repositoryRoot(from: url)
+                try Task.checkCancellation()
                 self.stopMonitoring()
                 self.repositoryURL = root
                 self.remember(root)
-                self.selectedReference = nil
-                self.selectedStash = nil
-                self.selectedSection = .history
+                self.prepareForRepositorySwitch()
                 try await self.reload(root: root)
+                try Task.checkCancellation()
+                guard self.isCurrentRepository(root) else { return }
                 self.startMonitoring(root: root)
             }
         }
@@ -136,9 +140,24 @@ final class RepositoryStore: ObservableObject {
         let generation = loadGeneration
         Task {
             do {
-                let details = try await client.commitDetails(at: root, hash: commit.hash)
+                async let detailsResult = client.commitDetails(at: root, hash: commit.hash)
+                async let verifiedCommitResult = client.commit(
+                    at: root,
+                    revision: commit.hash
+                )
+                let details = try await detailsResult
                 if generation == loadGeneration {
                     diff = details
+                }
+                let verifiedCommit = try await verifiedCommitResult
+                if generation == loadGeneration,
+                   selectedCommit?.hash == verifiedCommit.hash {
+                    if let index = commits.firstIndex(where: {
+                        $0.hash == verifiedCommit.hash
+                    }) {
+                        commits[index] = verifiedCommit
+                    }
+                    selectedCommit = verifiedCommit
                 }
             } catch {
                 show(error)
@@ -384,6 +403,8 @@ final class RepositoryStore: ObservableObject {
 
     private func reload(root: URL, revision: String? = nil) async throws {
         let snapshot = try await client.snapshot(at: root, revision: revision)
+        try Task.checkCancellation()
+        guard isCurrentRepository(root) else { return }
         branch = snapshot.branch
         upstream = snapshot.upstream
         ahead = snapshot.ahead
@@ -431,17 +452,47 @@ final class RepositoryStore: ObservableObject {
         _ label: String,
         operation: @escaping @MainActor () async throws -> Void
     ) async {
+        let operationID = UUID()
+        activeOperationID = operationID
         isLoading = true
         operationLabel = label
         defer {
-            isLoading = false
-            operationLabel = nil
+            if activeOperationID == operationID {
+                activeOperationID = nil
+                isLoading = false
+                operationLabel = nil
+            }
         }
         do {
             try await operation()
+        } catch is CancellationError {
+            // A newer repository switch superseded this operation.
         } catch {
             show(error)
         }
+    }
+
+    private func prepareForRepositorySwitch() {
+        loadGeneration += 1
+        branch = ""
+        upstream = nil
+        ahead = 0
+        behind = 0
+        changes = []
+        references = []
+        stashes = []
+        worktrees = []
+        commits = []
+        diff = ""
+        selectedReference = nil
+        selectedStash = nil
+        selectedCommit = nil
+        selectedChange = nil
+        selectedSection = .history
+    }
+
+    private func isCurrentRepository(_ root: URL) -> Bool {
+        repositoryURL?.standardizedFileURL == root.standardizedFileURL
     }
 
     private func show(_ error: Error) {

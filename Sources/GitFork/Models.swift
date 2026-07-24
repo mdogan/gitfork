@@ -336,6 +336,15 @@ struct GitOperationError: LocalizedError, Sendable {
     }
 }
 
+struct UnmergedBranchDeletionError: LocalizedError, Sendable {
+    let branch: String
+    let message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
 enum GitParser {
     static func parseStatus(_ data: Data) -> [WorkingChange] {
         let fields = data.split(separator: 0, omittingEmptySubsequences: true)

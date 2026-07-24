@@ -33,6 +33,7 @@ final class RepositoryStore: ObservableObject {
         }
     }
     @Published var errorMessage: String?
+    @Published private(set) var branchPendingForceDelete: GitReference?
     @Published var isConfirmingPush = false
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
@@ -344,11 +345,34 @@ final class RepositoryStore: ObservableObject {
     func delete(_ reference: GitReference) {
         let kind = reference.kind == .tag ? "tag" : "branch"
         mutate("Deleting \(kind) \(reference.name)") { root in
-            try await self.client.delete(at: root, reference: reference)
+            do {
+                try await self.client.delete(at: root, reference: reference)
+            } catch let error as UnmergedBranchDeletionError {
+                guard error.branch == reference.name else {
+                    throw error
+                }
+                self.branchPendingForceDelete = reference
+                return
+            }
             if self.selectedReference == reference {
                 self.selectedReference = nil
             }
         }
+    }
+
+    func forceDelete(_ reference: GitReference) {
+        guard branchPendingForceDelete == reference, !isLoading else { return }
+        branchPendingForceDelete = nil
+        mutate("Force deleting branch \(reference.name)") { root in
+            try await self.client.forceDelete(at: root, reference: reference)
+            if self.selectedReference == reference {
+                self.selectedReference = nil
+            }
+        }
+    }
+
+    func cancelForceDelete() {
+        branchPendingForceDelete = nil
     }
 
     func stash(message: String, scope: StashScope = .all) {
@@ -557,6 +581,7 @@ final class RepositoryStore: ObservableObject {
         selectedSection = .history
         commitMessage = ""
         amend = false
+        branchPendingForceDelete = nil
         isConfirmingPush = false
     }
 

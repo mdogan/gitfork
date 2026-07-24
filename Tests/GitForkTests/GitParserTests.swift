@@ -585,7 +585,7 @@ struct GitParserTests {
     }
 
     @Test
-    func buildsSafeLocalReferenceDeletionArguments() throws {
+    func buildsReferenceDeletionArguments() throws {
         let branch = GitReference(
             name: "feature/sidebar-delete",
             fullName: "refs/heads/feature/sidebar-delete",
@@ -623,11 +623,24 @@ struct GitParserTests {
             try GitClient.deleteArguments(for: tag)
                 == ["tag", "--delete", "--", "v1.0"]
         )
+        #expect(
+            try GitClient.forceDeleteArguments(for: branch)
+                == ["branch", "-D", "--", "feature/sidebar-delete"]
+        )
         #expect(throws: GitOperationError.self) {
             try GitClient.deleteArguments(for: currentBranch)
         }
         #expect(throws: GitOperationError.self) {
             try GitClient.deleteArguments(for: remoteBranch)
+        }
+        #expect(throws: GitOperationError.self) {
+            try GitClient.forceDeleteArguments(for: tag)
+        }
+        #expect(throws: GitOperationError.self) {
+            try GitClient.forceDeleteArguments(for: currentBranch)
+        }
+        #expect(throws: GitOperationError.self) {
+            try GitClient.forceDeleteArguments(for: remoteBranch)
         }
     }
 
@@ -1081,6 +1094,61 @@ struct GitParserTests {
                 ["tag", "--list", "v-delete-me"],
                 at: root
             )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
+    }
+
+    @Test
+    func requiresForceToDeleteUnmergedLocalBranch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkForceDeleteBranchTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "main\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try runGit(["switch", "-c", "feature/unmerged"], at: root)
+
+        let feature = root.appendingPathComponent("feature.txt")
+        try "unmerged\n".write(to: feature, atomically: true, encoding: .utf8)
+        try runGit(["add", "feature.txt"], at: root)
+        try runGit(["commit", "-m", "Unmerged commit"], at: root)
+        try runGit(["switch", "main"], at: root)
+
+        let reference = GitReference(
+            name: "feature/unmerged",
+            fullName: "refs/heads/feature/unmerged",
+            kind: .localBranch,
+            target: "abcdef",
+            isCurrent: false
+        )
+        let client = GitClient()
+
+        do {
+            try await client.delete(at: root, reference: reference)
+            Issue.record("Safe deletion unexpectedly deleted an unmerged branch")
+        } catch let error as UnmergedBranchDeletionError {
+            #expect(error.branch == reference.name)
+            #expect(error.message.contains("is not fully merged"))
+        }
+
+        #expect(
+            !(try runGitOutput(["branch", "--list", reference.name], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty)
+        )
+
+        try await client.forceDelete(at: root, reference: reference)
+
+        #expect(
+            try runGitOutput(["branch", "--list", reference.name], at: root)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
         )

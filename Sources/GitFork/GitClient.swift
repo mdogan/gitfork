@@ -508,8 +508,26 @@ struct GitClient: Sendable {
     }
 
     func delete(at root: URL, reference: GitReference) async throws {
+        do {
+            _ = try await run(
+                Self.deleteArguments(for: reference),
+                in: root
+            )
+        } catch let error as GitOperationError {
+            guard reference.kind == .localBranch,
+                  error.message.contains("is not fully merged") else {
+                throw error
+            }
+            throw UnmergedBranchDeletionError(
+                branch: reference.name,
+                message: error.message
+            )
+        }
+    }
+
+    func forceDelete(at root: URL, reference: GitReference) async throws {
         _ = try await run(
-            Self.deleteArguments(for: reference),
+            Self.forceDeleteArguments(for: reference),
             in: root
         )
     }
@@ -532,6 +550,22 @@ struct GitClient: Sendable {
                 message: "Deleting remote branches is not supported."
             )
         }
+    }
+
+    static func forceDeleteArguments(for reference: GitReference) throws -> [String] {
+        guard reference.kind == .localBranch else {
+            throw GitOperationError(
+                command: "git branch -D",
+                message: "Only local branches can be force deleted."
+            )
+        }
+        guard !reference.isCurrent else {
+            throw GitOperationError(
+                command: "git branch -D",
+                message: "Check out another branch before deleting \(reference.name)."
+            )
+        }
+        return ["branch", "-D", "--", reference.name]
     }
 
     func stash(

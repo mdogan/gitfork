@@ -329,11 +329,18 @@ private struct ReferenceSidebarRow: View {
         }
         .confirmationDialog(
             deleteConfirmationTitle,
-            isPresented: $isConfirmingDelete,
+            isPresented: deleteConfirmationBinding,
             titleVisibility: .visible
         ) {
-            Button(deleteActionTitle, role: .destructive) {
-                store.delete(reference)
+            if isConfirmingForceDelete {
+                Button("Force Delete Branch", role: .destructive) {
+                    store.forceDelete(reference)
+                }
+                .disabled(store.isLoading)
+            } else {
+                Button(deleteActionTitle, role: .destructive) {
+                    store.delete(reference)
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -345,11 +352,37 @@ private struct ReferenceSidebarRow: View {
         reference.kind == .tag ? "Delete Tag" : "Delete Branch"
     }
 
+    private var isConfirmingForceDelete: Bool {
+        store.branchPendingForceDelete == reference
+    }
+
+    private var deleteConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { isConfirmingDelete || isConfirmingForceDelete },
+            set: { isPresented in
+                guard !isPresented else { return }
+                isConfirmingDelete = false
+                if isConfirmingForceDelete {
+                    store.cancelForceDelete()
+                }
+            }
+        )
+    }
+
     private var deleteConfirmationTitle: String {
-        "\(deleteActionTitle) “\(reference.name)”?"
+        if isConfirmingForceDelete {
+            return "Force Delete Branch “\(reference.name)”?"
+        }
+        return "\(deleteActionTitle) “\(reference.name)”?"
     }
 
     private var deleteConfirmationMessage: String {
+        if isConfirmingForceDelete {
+            return """
+            Git reports that this branch contains commits that are not fully merged. \
+            Force deleting it runs git branch -D and may permanently discard those commits.
+            """
+        }
         if reference.kind == .tag {
             return "This deletes the local tag. It does not delete the tag from any remote."
         }

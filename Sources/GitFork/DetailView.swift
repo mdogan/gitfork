@@ -39,17 +39,21 @@ private struct CommitHeader: View {
                 .font(.title2.weight(.semibold))
                 .textSelection(.enabled)
 
-            HStack(spacing: 16) {
-                Label(commit.authorName, systemImage: "person.crop.circle")
+            HStack(spacing: 10) {
+                IdentityAvatar(name: commit.authorName, initials: commit.initials, size: 22)
+                Text(commit.authorName)
+                    .font(.callout.weight(.medium))
+                Text("·")
+                    .foregroundStyle(.tertiary)
                 Label {
                     Text(commit.date, format: .dateTime.year().month().day().hour().minute())
                 } icon: {
                     Image(systemName: "calendar")
                 }
+                .foregroundStyle(.secondary)
                 CommitSignatureBadge(signature: commit.signature)
             }
             .font(.callout)
-            .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
                 CopyableValue(label: "COMMIT", value: commit.hash, display: commit.shortHash)
@@ -68,7 +72,21 @@ private struct CommitHeader: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(.bar)
+        .background(HeaderBackground())
+    }
+}
+
+/// A soft, tinted bar used behind the commit and change detail headers.
+private struct HeaderBackground: View {
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.bar)
+            LinearGradient(
+                colors: [GitForkTheme.accent.opacity(0.07), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
     }
 }
 
@@ -119,7 +137,7 @@ private struct ChangeHeader: View {
             }
         }
         .padding(14)
-        .background(.bar)
+        .background(HeaderBackground())
         .alert("Discard All Changes in This File?", isPresented: $isConfirmingFileDiscard) {
             Button("Cancel", role: .cancel) {}
             Button("Discard", role: .destructive) {
@@ -311,6 +329,7 @@ private struct DiffTextView: View {
 private enum DiffLayout {
     static let rowHeight: CGFloat = 20
     static let lineNumberWidth: CGFloat = 34
+    static let accentBarWidth: CGFloat = 2.5
 }
 
 private struct DiffHunkView: View {
@@ -359,7 +378,7 @@ private struct DiffHunkView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Color.clear
-                    .frame(width: DiffLayout.lineNumberWidth * 2)
+                    .frame(width: DiffLayout.accentBarWidth + DiffLayout.lineNumberWidth * 2)
                 Divider()
                 Text(hunk.header.text)
                     .font(.system(size: 12, design: .monospaced))
@@ -484,13 +503,14 @@ private struct DiffHunkView: View {
 }
 
 private struct DiffLineView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let line: UnifiedDiffLine
     let isRangeSelected: Bool
     let allowsTextSelection: Bool
 
     private var foreground: Color {
-        if line.kind == .addition { return Color(red: 0.10, green: 0.55, blue: 0.25) }
-        if line.kind == .deletion { return Color(red: 0.78, green: 0.18, blue: 0.18) }
+        if line.kind == .addition { return GitForkTheme.diffAddition(colorScheme) }
+        if line.kind == .deletion { return GitForkTheme.diffDeletion(colorScheme) }
         if line.kind == .hunkHeader { return GitForkTheme.blue }
         if line.text.hasPrefix("diff ") || line.text.hasPrefix("commit ") { return GitForkTheme.purple }
         return .primary
@@ -498,9 +518,15 @@ private struct DiffLineView: View {
 
     private var background: Color {
         if isRangeSelected { return GitForkTheme.blue.opacity(0.18) }
-        if line.kind == .addition { return GitForkTheme.green.opacity(0.10) }
-        if line.kind == .deletion { return GitForkTheme.red.opacity(0.09) }
+        if line.kind == .addition { return GitForkTheme.green.opacity(0.11) }
+        if line.kind == .deletion { return GitForkTheme.red.opacity(0.10) }
         if line.kind == .hunkHeader { return GitForkTheme.blue.opacity(0.08) }
+        return .clear
+    }
+
+    private var accentBar: Color {
+        if line.kind == .addition { return GitForkTheme.green.opacity(0.85) }
+        if line.kind == .deletion { return GitForkTheme.red.opacity(0.85) }
         return .clear
     }
 
@@ -515,6 +541,10 @@ private struct DiffLineView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            Rectangle()
+                .fill(accentBar)
+                .frame(width: DiffLayout.accentBarWidth)
+
             lineNumber(line.oldLineNumber)
             lineNumber(line.newLineNumber)
 

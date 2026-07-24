@@ -3,9 +3,76 @@ import SwiftUI
 enum GitForkTheme {
     static let accent = Color(red: 0.24, green: 0.55, blue: 0.96)
     static let blue = Color(red: 0.24, green: 0.55, blue: 0.96)
-    static let green = Color(red: 0.25, green: 0.70, blue: 0.42)
-    static let red = Color(red: 0.88, green: 0.32, blue: 0.31)
-    static let purple = Color(red: 0.57, green: 0.42, blue: 0.82)
+    static let green = Color(red: 0.22, green: 0.71, blue: 0.44)
+    static let red = Color(red: 0.88, green: 0.33, blue: 0.33)
+    static let purple = Color(red: 0.58, green: 0.43, blue: 0.84)
+    static let orange = Color(red: 0.95, green: 0.56, blue: 0.24)
+
+    /// A curated, harmonious palette used to give authors and labels a stable,
+    /// recognizable color. Kept mid-saturation so white glyphs stay legible.
+    static let identityPalette: [Color] = [
+        Color(red: 0.90, green: 0.35, blue: 0.42),  // rose
+        Color(red: 0.95, green: 0.56, blue: 0.24),  // orange
+        Color(red: 0.89, green: 0.68, blue: 0.24),  // amber
+        Color(red: 0.28, green: 0.72, blue: 0.46),  // green
+        Color(red: 0.20, green: 0.68, blue: 0.66),  // teal
+        Color(red: 0.28, green: 0.56, blue: 0.94),  // blue
+        Color(red: 0.42, green: 0.48, blue: 0.90),  // indigo
+        Color(red: 0.60, green: 0.42, blue: 0.85),  // purple
+        Color(red: 0.90, green: 0.42, blue: 0.68)   // pink
+    ]
+
+    /// Deterministically maps a seed (e.g. an author name) to a palette color,
+    /// so the same person keeps the same color across launches.
+    static func identityColor(for seed: String) -> Color {
+        guard !identityPalette.isEmpty else { return accent }
+        var hash: UInt64 = 1469598103934665603  // FNV-1a offset basis
+        for byte in seed.lowercased().utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return identityPalette[Int(hash % UInt64(identityPalette.count))]
+    }
+
+    /// Foreground for added diff lines, tuned for legibility in each appearance.
+    static func diffAddition(_ scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color(red: 0.49, green: 0.86, blue: 0.58)
+            : Color(red: 0.11, green: 0.53, blue: 0.27)
+    }
+
+    /// Foreground for removed diff lines, tuned for legibility in each appearance.
+    static func diffDeletion(_ scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color(red: 0.96, green: 0.51, blue: 0.51)
+            : Color(red: 0.78, green: 0.18, blue: 0.18)
+    }
+}
+
+/// A colorful, deterministic avatar built from a person's initials. The fill
+/// color is derived from `name`, so each author is visually recognizable.
+struct IdentityAvatar: View {
+    let name: String
+    let initials: String
+    var size: CGFloat = 18
+
+    private var color: Color { GitForkTheme.identityColor(for: name) }
+
+    var body: some View {
+        Circle()
+            .fill(color.gradient)
+            .frame(width: size, height: size)
+            .overlay {
+                Text(initials)
+                    .font(.system(size: max(7, size * 0.42), weight: .bold))
+                    .foregroundStyle(.white)
+                    .minimumScaleFactor(0.6)
+            }
+            .overlay {
+                Circle().strokeBorder(.white.opacity(0.22), lineWidth: 0.5)
+            }
+            .shadow(color: color.opacity(0.35), radius: size * 0.08, y: 0.5)
+    }
 }
 
 enum GitForkHoverButtonVariant {

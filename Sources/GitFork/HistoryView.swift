@@ -63,18 +63,25 @@ private struct CommitRow: View {
                     CommitSignatureBadge(signature: commit.signature, compact: true)
 
                     ForEach(commit.decorations.prefix(2), id: \.self) { decoration in
-                        Text(cleanDecoration(decoration))
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .foregroundStyle(labelColor(decoration))
-                            .background(labelColor(decoration).opacity(0.13), in: Capsule())
-                            .lineLimit(1)
+                        HStack(spacing: 3) {
+                            Image(systemName: labelIcon(decoration))
+                                .font(.system(size: 8, weight: .bold))
+                            Text(cleanDecoration(decoration))
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .foregroundStyle(labelColor(decoration))
+                        .background(labelColor(decoration).opacity(0.14), in: Capsule())
+                        .overlay(
+                            Capsule().strokeBorder(labelColor(decoration).opacity(0.22), lineWidth: 0.5)
+                        )
+                        .lineLimit(1)
                     }
                 }
 
                 HStack(spacing: 7) {
-                    AvatarView(initials: commit.initials)
+                    IdentityAvatar(name: commit.authorName, initials: commit.initials)
                     Text(commit.authorName)
                         .lineLimit(1)
                     Text("·")
@@ -101,6 +108,13 @@ private struct CommitRow: View {
         if value.contains("/") { return GitForkTheme.blue }
         return GitForkTheme.green
     }
+
+    private func labelIcon(_ value: String) -> String {
+        if value.contains("tag:") { return "tag.fill" }
+        if value.contains("HEAD") { return "smallcircle.filled.circle" }
+        if value.contains("/") { return "cloud" }
+        return "arrow.triangle.branch"
+    }
 }
 
 private struct CommitGraphGlyph: View {
@@ -109,42 +123,35 @@ private struct CommitGraphGlyph: View {
     var body: some View {
         Canvas { context, size in
             let centerX = size.width / 2
+            let midY = size.height / 2
+            let nodeColor = isMerge ? GitForkTheme.purple : GitForkTheme.accent
+
             var main = Path()
             main.move(to: CGPoint(x: centerX, y: 0))
             main.addLine(to: CGPoint(x: centerX, y: size.height))
-            context.stroke(main, with: .color(GitForkTheme.accent.opacity(0.7)), lineWidth: 2)
+            context.stroke(main, with: .color(GitForkTheme.accent.opacity(0.35)), lineWidth: 2)
 
             if isMerge {
                 var branch = Path()
-                branch.move(to: CGPoint(x: centerX, y: size.height * 0.5))
+                branch.move(to: CGPoint(x: centerX, y: midY))
                 branch.addCurve(
                     to: CGPoint(x: size.width, y: 0),
-                    control1: CGPoint(x: size.width, y: size.height * 0.45),
-                    control2: CGPoint(x: size.width, y: size.height * 0.25)
+                    control1: CGPoint(x: size.width, y: midY),
+                    control2: CGPoint(x: size.width, y: size.height * 0.16)
                 )
-                context.stroke(branch, with: .color(GitForkTheme.purple.opacity(0.75)), lineWidth: 2)
+                context.stroke(branch, with: .color(GitForkTheme.purple.opacity(0.5)), lineWidth: 2)
             }
 
-            let circle = Path(
-                ellipseIn: CGRect(x: centerX - 5, y: size.height / 2 - 5, width: 10, height: 10)
+            // Soft halo separates the node from the line regardless of background.
+            let halo = Path(
+                ellipseIn: CGRect(x: centerX - 7, y: midY - 7, width: 14, height: 14)
             )
-            context.fill(circle, with: .color(GitForkTheme.accent))
-            context.stroke(circle, with: .color(.white), lineWidth: 1.5)
+            context.fill(halo, with: .color(nodeColor.opacity(0.16)))
+
+            let node = Path(
+                ellipseIn: CGRect(x: centerX - 4.5, y: midY - 4.5, width: 9, height: 9)
+            )
+            context.fill(node, with: .color(nodeColor))
         }
-    }
-}
-
-private struct AvatarView: View {
-    let initials: String
-
-    var body: some View {
-        Circle()
-            .fill(GitForkTheme.blue.opacity(0.15))
-            .frame(width: 18, height: 18)
-            .overlay {
-                Text(initials)
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(GitForkTheme.blue)
-            }
     }
 }

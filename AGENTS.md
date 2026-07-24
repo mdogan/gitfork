@@ -43,6 +43,7 @@ Run commands from the repository root:
 make build
 make test
 make app
+make install
 ```
 
 Useful direct commands:
@@ -58,6 +59,9 @@ The packaged application is written to:
 ```text
 .build/release/GitFork.app
 ```
+
+`make install` replaces `$HOME/Applications/GitFork.app` with the newly built,
+signature-verified bundle.
 
 `.build/` is generated and must not be committed.
 
@@ -99,6 +103,8 @@ swift test --disable-sandbox
 - A horizontally scrolling diff must still have a minimum content width equal to
   its viewport; short diffs should fill the detail pane instead of appearing as
   a narrow strip.
+- A short diff must also fill the viewport height and remain aligned to
+  `.topLeading`; do not allow bidirectional scrolling to center it vertically.
 - Repository switching uses the persisted `recentRepositories` list. Clearly
   mark the active repository and retain an “Open Other Repository…” action.
 - The `fork` helper is bundled under `Contents/Helpers` and installed from the
@@ -112,6 +118,12 @@ swift test --disable-sandbox
 - Refresh repository state after every mutating operation.
 - Pulls are fast-forward-only unless product behavior is deliberately changed.
 - A first push may establish an upstream using the repository's first remote.
+- The commit composer owns a persistent OpenPGP signing choice. Enabled commits
+  use `-c gpg.format=openpgp --gpg-sign`; disabled commits use `--no-gpg-sign`
+  so the UI remains authoritative over global `commit.gpgSign`.
+- Resolve `gpg.openpgp.program` or `gpg.program` to an absolute executable before
+  signing. GUI-launched Git processes must augment `PATH` with Homebrew and
+  common user binary directories.
 - Do not add commands that can wait for interactive terminal input.
 - Never discard changes, delete branches, rewrite history, or force-push without
   an explicit user action and appropriate confirmation.

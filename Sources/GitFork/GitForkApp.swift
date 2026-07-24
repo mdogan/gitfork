@@ -85,6 +85,7 @@ struct SettingsView: View {
         Form {
             LabeledContent("Git executable", value: "/usr/bin/git")
             LabeledContent("Default pull strategy", value: "Fast-forward only")
+            LabeledContent("Commit signing", value: "OpenPGP via Git configuration")
         }
         .formStyle(.grouped)
         .padding()

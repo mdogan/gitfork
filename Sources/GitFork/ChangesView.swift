@@ -151,9 +151,19 @@ private struct CommitComposer: View {
                 Label("Commit", systemImage: "checkmark.circle")
                     .font(.headline)
                 Spacer()
+
+                Toggle(isOn: $store.signCommit) {
+                    Label("Sign", systemImage: "checkmark.seal")
+                }
+                .toggleStyle(.checkbox)
+                .font(.caption)
+                .foregroundStyle(store.signCommit ? GitForkTheme.green : .primary)
+                .help("Sign commits with the configured OpenPGP key")
+
                 Toggle("Amend", isOn: $store.amend)
                     .toggleStyle(.checkbox)
                     .font(.caption)
+                    .help("Replace the latest commit")
             }
 
             TextEditor(text: $store.commitMessage)
@@ -180,11 +190,16 @@ private struct CommitComposer: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(store.amend ? "Amend Commit" : "Commit \(store.branch)") {
+                Button {
                     store.createCommit()
+                } label: {
+                    Label(
+                        commitButtonTitle,
+                        systemImage: store.signCommit ? "checkmark.seal.fill" : "checkmark.circle"
+                    )
                 }
                 .buttonStyle(.borderedProminent)
-                .help(store.amend ? "Replace the latest commit" : "Commit the staged changes")
+                .help(commitButtonHelp)
                 .disabled(
                     (!store.amend && store.stagedChanges.isEmpty)
                         || store.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -194,5 +209,21 @@ private struct CommitComposer: View {
         }
         .padding(12)
         .background(.bar)
+    }
+
+    private var commitButtonTitle: String {
+        if store.amend {
+            return store.signCommit ? "Amend & Sign" : "Amend Commit"
+        }
+        return store.signCommit ? "Sign & Commit \(store.branch)" : "Commit \(store.branch)"
+    }
+
+    private var commitButtonHelp: String {
+        if store.signCommit {
+            return store.amend
+                ? "Replace and OpenPGP-sign the latest commit"
+                : "Create an OpenPGP-signed commit using Git's configured key"
+        }
+        return store.amend ? "Replace the latest commit" : "Commit the staged changes"
     }
 }

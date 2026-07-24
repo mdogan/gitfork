@@ -11,7 +11,7 @@ the Git installation built into macOS at `/usr/bin/git`.
 - Search commits by subject, author, hash, or reference
 - Inspect syntax-colored commit and working-tree diffs
 - Stage or unstage individual files and all changes
-- Commit and amend from the changes view
+- Commit, amend, and optionally OpenPGP-sign from the changes view
 - Fetch, fast-forward pull, and push
 - Create and check out branches
 - Stash tracked and untracked changes
@@ -40,6 +40,12 @@ open .build/release/GitFork.app
 The local build is ad-hoc signed. Distribution outside your Mac requires an Apple
 Developer ID certificate and notarization.
 
+Install or replace the app in `$HOME/Applications`:
+
+```sh
+make install
+```
+
 ## Command-line helper
 
 Choose **GitFork → Install Command Line Tool…** from the macOS application menu.
@@ -62,6 +68,22 @@ fork --version
 
 The helper discovers the repository root and launches GitFork through its
 `gitfork://` URL handler.
+
+## Signed commits
+
+Enable **Sign** beside **Amend** in the commit composer to create an OpenPGP-signed
+commit. The preference is remembered between launches. GitFork uses Git's
+configured signing key and GPG program. It automatically searches GUI-unavailable
+shell paths including `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, and
+standard system binary directories:
+
+```sh
+git config --global user.signingKey <key-id>
+git config --global gpg.program /path/to/gpg
+```
+
+When signing is disabled, GitFork passes `--no-gpg-sign` so the per-commit option
+also overrides a global `commit.gpgSign` setting.
 
 ## Test
 

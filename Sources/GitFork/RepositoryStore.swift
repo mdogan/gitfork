@@ -23,6 +23,11 @@ final class RepositoryStore: ObservableObject {
     @Published var searchText = ""
     @Published var commitMessage = ""
     @Published var amend = false
+    @Published var signCommit = false {
+        didSet {
+            UserDefaults.standard.set(signCommit, forKey: Self.signCommitKey)
+        }
+    }
     @Published var errorMessage: String?
     @Published var isShowingCLIInstaller = false
     @Published private(set) var recentRepositories: [URL] = []
@@ -30,8 +35,10 @@ final class RepositoryStore: ObservableObject {
     private let client = GitClient()
     private var loadGeneration = 0
     private let recentKey = "recentRepositories"
+    private static let signCommitKey = "signCommitsWithGPG"
 
     init() {
+        signCommit = UserDefaults.standard.bool(forKey: Self.signCommitKey)
         recentRepositories = (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -195,8 +202,22 @@ final class RepositoryStore: ObservableObject {
             errorMessage = "Enter a commit message first."
             return
         }
-        mutate(amend ? "Amending commit" : "Creating commit") { root in
-            try await self.client.commit(at: root, message: message, amend: self.amend)
+        let shouldAmend = amend
+        let shouldSign = signCommit
+        let operation: String
+        if shouldAmend {
+            operation = shouldSign ? "Amending with GPG signature" : "Amending commit"
+        } else {
+            operation = shouldSign ? "Creating GPG-signed commit" : "Creating commit"
+        }
+
+        mutate(operation) { root in
+            try await self.client.commit(
+                at: root,
+                message: message,
+                amend: shouldAmend,
+                signWithGPG: shouldSign
+            )
             self.commitMessage = ""
             self.amend = false
             self.selectedSection = .history

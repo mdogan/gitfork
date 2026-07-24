@@ -145,9 +145,10 @@ private struct DiffTextView: View {
                             DiffLine(line: line)
                         }
                     }
-                    .padding(.vertical, 8)
+                    .padding(.bottom, 8)
                     .frame(
                         minWidth: viewport.size.width,
+                        minHeight: viewport.size.height,
                         alignment: .topLeading
                     )
                 }

@@ -114,13 +114,155 @@ struct GitClient: Sendable {
         }
     }
 
-    func commit(at root: URL, message: String, amend: Bool) async throws {
-        var arguments = ["commit"]
+    func commit(
+        at root: URL,
+        message: String,
+        amend: Bool,
+        signWithGPG: Bool
+    ) async throws {
+        let gpgProgram = signWithGPG
+            ? try await resolvedGPGProgram(at: root).path
+            : nil
+        let arguments = Self.commitArguments(
+            message: message,
+            amend: amend,
+            signWithGPG: signWithGPG,
+            gpgProgram: gpgProgram
+        )
+        _ = try await run(arguments, in: root)
+    }
+
+    static func commitArguments(
+        message: String,
+        amend: Bool,
+        signWithGPG: Bool,
+        gpgProgram: String? = nil
+    ) -> [String] {
+        var arguments: [String] = []
+        if signWithGPG {
+            arguments += ["-c", "gpg.format=openpgp"]
+            if let gpgProgram {
+                arguments += ["-c", "gpg.openpgp.program=\(gpgProgram)"]
+            }
+        }
+
+        arguments += [
+            "commit",
+            signWithGPG ? "--gpg-sign" : "--no-gpg-sign"
+        ]
         if amend {
             arguments.append("--amend")
         }
         arguments += ["-m", message]
-        _ = try await run(arguments, in: root)
+        return arguments
+    }
+
+    static func commandSearchPath(
+        inheritedPath: String?,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String {
+        var directories = (inheritedPath ?? "")
+            .split(separator: ":")
+            .map(String.init)
+        directories += [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            homeDirectory.appendingPathComponent(".local/bin").path,
+            homeDirectory.appendingPathComponent("bin").path,
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ]
+
+        var seen = Set<String>()
+        return directories
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+            .joined(separator: ":")
+    }
+
+    static func executableURL(
+        named program: String,
+        searchPath: String,
+        workingDirectory: URL
+    ) -> URL? {
+        let expanded = NSString(string: program).expandingTildeInPath
+        if expanded.contains("/") {
+            let candidate = expanded.hasPrefix("/")
+                ? URL(fileURLWithPath: expanded)
+                : workingDirectory.appendingPathComponent(expanded)
+            return FileManager.default.isExecutableFile(atPath: candidate.path)
+                ? candidate.standardizedFileURL
+                : nil
+        }
+
+        for directory in searchPath.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(directory))
+                .appendingPathComponent(expanded)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return candidate.standardizedFileURL
+            }
+        }
+        return nil
+    }
+
+    private func resolvedGPGProgram(at root: URL) async throws -> URL {
+        let configuredProgram = try await configuredGPGProgram(at: root)
+        let searchPath = Self.commandSearchPath(
+            inheritedPath: ProcessInfo.processInfo.environment["PATH"]
+        )
+
+        if let configuredProgram {
+            if let executable = Self.executableURL(
+                named: configuredProgram,
+                searchPath: searchPath,
+                workingDirectory: root
+            ) {
+                return executable
+            }
+
+            throw GitOperationError(
+                command: "git commit --gpg-sign",
+                message: """
+                Git's configured GPG program '\(configuredProgram)' could not be found. \
+                Install GnuPG or update it with:
+                git config --global gpg.program /absolute/path/to/gpg
+                """
+            )
+        }
+
+        for candidate in ["gpg", "gpg2"] {
+            if let executable = Self.executableURL(
+                named: candidate,
+                searchPath: searchPath,
+                workingDirectory: root
+            ) {
+                return executable
+            }
+        }
+
+        throw GitOperationError(
+            command: "git commit --gpg-sign",
+            message: """
+            GPG was not found. Install GnuPG (for example, `brew install gnupg`) \
+            or configure its absolute path with:
+            git config --global gpg.program /absolute/path/to/gpg
+            """
+        )
+    }
+
+    private func configuredGPGProgram(at root: URL) async throws -> String? {
+        for key in ["gpg.openpgp.program", "gpg.program"] {
+            let result = try await runAllowingFailure(
+                ["config", "--get", key],
+                in: root
+            )
+            let value = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.exitCode == 0, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 
     func fetch(at root: URL) async throws {
@@ -217,6 +359,9 @@ struct GitClient: Sendable {
             var environment = ProcessInfo.processInfo.environment
             environment["LC_ALL"] = "C"
             environment["GIT_TERMINAL_PROMPT"] = "0"
+            environment["PATH"] = Self.commandSearchPath(
+                inheritedPath: environment["PATH"]
+            )
             process.environment = environment
 
             try process.run()

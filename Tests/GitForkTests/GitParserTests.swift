@@ -98,6 +98,70 @@ struct GitParserTests {
     }
 
     @Test
+    func buildsUnsignedAndGPGSignedCommitArguments() {
+        #expect(
+            GitClient.commitArguments(
+                message: "Regular commit",
+                amend: false,
+                signWithGPG: false
+            ) == [
+                "commit",
+                "--no-gpg-sign",
+                "-m",
+                "Regular commit"
+            ]
+        )
+
+        #expect(
+            GitClient.commitArguments(
+                message: "Signed amendment",
+                amend: true,
+                signWithGPG: true,
+                gpgProgram: "/opt/homebrew/bin/gpg"
+            ) == [
+                "-c",
+                "gpg.format=openpgp",
+                "-c",
+                "gpg.openpgp.program=/opt/homebrew/bin/gpg",
+                "commit",
+                "--gpg-sign",
+                "--amend",
+                "-m",
+                "Signed amendment"
+            ]
+        )
+    }
+
+    @Test
+    func resolvesExecutablesFromAugmentedGUIPath() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkGPGTests-\(UUID().uuidString)")
+        let bin = root.appendingPathComponent("bin")
+        let fakeGPG = bin.appendingPathComponent("gpg")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: fakeGPG)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: fakeGPG.path
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let searchPath = GitClient.commandSearchPath(
+            inheritedPath: bin.path,
+            homeDirectory: root
+        )
+        let resolved = GitClient.executableURL(
+            named: "gpg",
+            searchPath: searchPath,
+            workingDirectory: root
+        )
+
+        #expect(resolved == fakeGPG.standardizedFileURL)
+        #expect(searchPath.contains("/opt/homebrew/bin"))
+        #expect(searchPath.contains("/usr/local/bin"))
+    }
+
+    @Test
     func installsBundledCLIIntoWritableDirectory() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitForkInstallerTests-\(UUID().uuidString)")

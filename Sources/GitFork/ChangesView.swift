@@ -85,14 +85,15 @@ private struct ChangeList: View {
     @EnvironmentObject private var store: RepositoryStore
 
     var body: some View {
-        List {
+        List(selection: changeSelection) {
             if !store.changes.isEmpty {
                 Section {
-                    if store.stagedChanges.isEmpty {
+                    if stagedChanges.isEmpty {
                         EmptyChangeRow(title: "No staged changes")
                     } else {
-                        ForEach(store.stagedChanges.map { PresentedChange($0, staged: true) }) { item in
+                        ForEach(stagedChanges) { item in
                             ChangeRow(change: item.change, staged: item.staged)
+                                .tag(item)
                         }
                     }
                 } header: {
@@ -107,11 +108,12 @@ private struct ChangeList: View {
                 }
 
                 Section {
-                    if store.unstagedChanges.isEmpty {
+                    if unstagedChanges.isEmpty {
                         EmptyChangeRow(title: "No unstaged changes")
                     } else {
-                        ForEach(store.unstagedChanges.map { PresentedChange($0, staged: false) }) { item in
+                        ForEach(unstagedChanges) { item in
                             ChangeRow(change: item.change, staged: item.staged)
+                                .tag(item)
                         }
                     }
                 } header: {
@@ -138,9 +140,35 @@ private struct ChangeList: View {
             }
         }
     }
+
+    private var stagedChanges: [PresentedChange] {
+        store.stagedChanges.map { PresentedChange($0, staged: true) }
+    }
+
+    private var unstagedChanges: [PresentedChange] {
+        store.unstagedChanges.map { PresentedChange($0, staged: false) }
+    }
+
+    private var changes: [PresentedChange] {
+        stagedChanges + unstagedChanges
+    }
+
+    private var changeSelection: Binding<PresentedChange?> {
+        Binding(
+            get: {
+                changes.first {
+                    $0.change == store.selectedChange
+                        && $0.staged == store.selectedChangeIsStaged
+                }
+            },
+            set: { item in
+                store.selectChange(item?.change, staged: item?.staged ?? false)
+            }
+        )
+    }
 }
 
-private struct PresentedChange: Identifiable {
+private struct PresentedChange: Hashable, Identifiable {
     let change: WorkingChange
     let staged: Bool
 

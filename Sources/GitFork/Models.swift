@@ -46,6 +46,59 @@ struct GitReference: Identifiable, Hashable, Sendable {
     var id: String { fullName }
 }
 
+enum GitSignatureStatus: Character, Hashable, Sendable {
+    case good = "G"
+    case bad = "B"
+    case unknownValidity = "U"
+    case expiredSignature = "X"
+    case expiredKey = "Y"
+    case revokedKey = "R"
+    case cannotCheck = "E"
+    case none = "N"
+
+    init(code: Character?) {
+        self = code.flatMap(Self.init(rawValue:)) ?? .cannotCheck
+    }
+
+    var isSigned: Bool { self != .none }
+
+    var title: String {
+        switch self {
+        case .good: "Verified signature"
+        case .bad: "Bad signature"
+        case .unknownValidity: "Signed · unknown trust"
+        case .expiredSignature: "Signed · signature expired"
+        case .expiredKey: "Signed · key expired"
+        case .revokedKey: "Signed · key revoked"
+        case .cannotCheck: "Signed · verification unavailable"
+        case .none: "Unsigned"
+        }
+    }
+}
+
+struct GitCommitSignature: Hashable, Sendable {
+    let status: GitSignatureStatus
+    let keyID: String
+    let signer: String
+
+    static let unsigned = GitCommitSignature(
+        status: .none,
+        keyID: "",
+        signer: ""
+    )
+
+    var details: String {
+        var parts = [status.title]
+        if !signer.isEmpty {
+            parts.append(signer)
+        }
+        if !keyID.isEmpty {
+            parts.append("Key \(keyID)")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 struct GitCommit: Identifiable, Hashable, Sendable {
     let hash: String
     let parents: [String]
@@ -53,6 +106,7 @@ struct GitCommit: Identifiable, Hashable, Sendable {
     let authorEmail: String
     let date: Date
     let decorations: [String]
+    let signature: GitCommitSignature
     let subject: String
 
     var id: String { hash }
@@ -186,6 +240,26 @@ enum GitParser {
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
 
+                let signature: GitCommitSignature
+                let subject: String
+                if fields.count >= 11 {
+                    let rawVerification = fields[9]
+                    let reportedStatus = GitSignatureStatus(code: fields[6].first)
+                    signature = GitCommitSignature(
+                        status: reportedStatus == .none && !rawVerification.isEmpty
+                            ? .cannotCheck
+                            : reportedStatus,
+                        keyID: fields[7].isEmpty
+                            ? signingKey(from: rawVerification)
+                            : fields[7],
+                        signer: fields[8]
+                    )
+                    subject = fields[10]
+                } else {
+                    signature = .unsigned
+                    subject = fields[6]
+                }
+
                 return GitCommit(
                     hash: fields[0],
                     parents: fields[1].split(separator: " ").map(String.init),
@@ -193,9 +267,21 @@ enum GitParser {
                     authorEmail: fields[3],
                     date: formatter.date(from: fields[4]) ?? .distantPast,
                     decorations: decorations,
-                    subject: fields[6]
+                    signature: signature,
+                    subject: subject
                 )
             }
+    }
+
+    private static func signingKey(from verification: String) -> String {
+        for line in verification.split(whereSeparator: \.isNewline) {
+            guard let range = line.range(of: " key ", options: .caseInsensitive) else {
+                continue
+            }
+            return line[range.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ""
     }
 
     static func parseReferences(_ text: String, currentBranch: String) -> [GitReference] {

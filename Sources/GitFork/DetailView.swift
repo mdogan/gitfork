@@ -41,6 +41,7 @@ private struct CommitHeader: View {
                 } icon: {
                     Image(systemName: "calendar")
                 }
+                CommitSignatureBadge(signature: commit.signature)
             }
             .font(.callout)
             .foregroundStyle(.secondary)

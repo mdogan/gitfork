@@ -60,6 +60,8 @@ private struct CommitRow: View {
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
 
+                    CommitSignatureBadge(signature: commit.signature, compact: true)
+
                     ForEach(commit.decorations.prefix(2), id: \.self) { decoration in
                         Text(cleanDecoration(decoration))
                             .font(.caption2.weight(.semibold))

@@ -21,7 +21,7 @@ struct GitClient: Sendable {
             "log",
             "--max-count=300",
             "--date=iso-strict",
-            "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%s%x1e",
+            "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%G?%x1f%GK%x1f%GS%x1f%GG%x1f%s%x1e",
             revision ?? "--all"
         ], in: root)
 

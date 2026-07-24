@@ -17,14 +17,33 @@ struct GitParserTests {
 
     @Test
     func parsesCommitRecords() {
-        let input = "abcdef123456\u{1f}111111 222222\u{1f}Ada Lovelace\u{1f}ada@example.com\u{1f}2026-07-23T10:30:00+03:00\u{1f}HEAD -> main, tag: v1.0\u{1f}Ship native client\u{1e}"
+        let input = "abcdef123456\u{1f}111111 222222\u{1f}Ada Lovelace\u{1f}ada@example.com\u{1f}2026-07-23T10:30:00+03:00\u{1f}HEAD -> main, tag: v1.0\u{1f}G\u{1f}ABCDEF1234567890\u{1f}Ada Lovelace\u{1f}Good signature\u{1f}Ship native client\u{1e}"
         let commits = GitParser.parseCommits(input)
 
         #expect(commits.count == 1)
         #expect(commits[0].shortHash == "abcdef12")
         #expect(commits[0].parents.count == 2)
         #expect(commits[0].decorations == ["HEAD -> main", "tag: v1.0"])
+        #expect(commits[0].signature.status == .good)
+        #expect(commits[0].signature.keyID == "ABCDEF1234567890")
+        #expect(commits[0].signature.signer == "Ada Lovelace")
         #expect(commits[0].subject == "Ship native client")
+    }
+
+    @Test
+    func detectsSignatureWhenTrustVerificationCannotComplete() {
+        let verification = """
+        gpg: Signature made Fri Jul 24 09:27:31 2026 +03
+        gpg:                using RSA key ABCDEF1234567890
+        gpg: Fatal: trust database unavailable
+        """
+        let input = "abcdef123456\u{1f}\u{1f}Ada Lovelace\u{1f}ada@example.com\u{1f}2026-07-24T09:27:31+03:00\u{1f}\u{1f}N\u{1f}\u{1f}\u{1f}\(verification)\u{1f}Signed commit\u{1e}"
+        let commits = GitParser.parseCommits(input)
+
+        #expect(commits.count == 1)
+        #expect(commits[0].signature.status == .cannotCheck)
+        #expect(commits[0].signature.keyID == "ABCDEF1234567890")
+        #expect(commits[0].subject == "Signed commit")
     }
 
     @Test
@@ -69,6 +88,7 @@ struct GitParserTests {
         #expect(discoveredRoot == root.standardizedFileURL)
         #expect(snapshot.branch == "main")
         #expect(snapshot.commits.first?.subject == "Initial commit")
+        #expect(snapshot.commits.first?.signature.status == GitSignatureStatus.none)
         #expect(snapshot.changes.first?.path == "README.md")
         #expect(snapshot.changes.first?.isUnstaged == true)
 

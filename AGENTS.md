@@ -124,6 +124,9 @@ swift test --disable-sandbox
 - Resolve `gpg.openpgp.program` or `gpg.program` to an absolute executable before
   signing. GUI-launched Git processes must augment `PATH` with Homebrew and
   common user binary directories.
+- Load signature state with Git's `%G?`, `%GK`, and `%GS` pretty-format fields.
+  Show signed commits in history and the detail header; a cached `gpg-agent`
+  passphrase means signing may legitimately complete without a prompt.
 - Do not add commands that can wait for interactive terminal input.
 - Never discard changes, delete branches, rewrite history, or force-push without
   an explicit user action and appropriate confirmation.

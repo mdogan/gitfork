@@ -33,6 +33,7 @@ final class RepositoryStore: ObservableObject {
     }
     @Published var errorMessage: String?
     @Published var isShowingCLIInstaller = false
+    @Published var isShowingRepositorySwitcher = false
     @Published private(set) var recentRepositories: [URL] = []
 
     private let client = GitClient()

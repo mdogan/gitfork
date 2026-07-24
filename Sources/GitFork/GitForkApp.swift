@@ -28,6 +28,13 @@ struct GitForkApp: App {
             }
 
             CommandMenu("Repository") {
+                Button("Switch Repository…") {
+                    store.isShowingRepositorySwitcher = true
+                }
+                .keyboardShortcut("k")
+
+                Divider()
+
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r")
                     .disabled(store.repositoryURL == nil)
@@ -63,6 +70,10 @@ struct RootView: View {
         }
         .sheet(isPresented: $store.isShowingCLIInstaller) {
             CLIInstallerView()
+        }
+        .sheet(isPresented: $store.isShowingRepositorySwitcher) {
+            RepositorySwitcherSheet()
+                .environmentObject(store)
         }
         .alert(
             "GitFork",

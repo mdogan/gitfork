@@ -109,6 +109,71 @@ struct GitParserTests {
     }
 
     @Test
+    func buildsSlashDelimitedReferenceTree() throws {
+        let references = [
+            GitReference(
+                name: "feature/blob-store",
+                fullName: "refs/heads/feature/blob-store",
+                kind: .localBranch,
+                target: "111111",
+                isCurrent: false
+            ),
+            GitReference(
+                name: "feature/proxy/quic",
+                fullName: "refs/heads/feature/proxy/quic",
+                kind: .localBranch,
+                target: "222222",
+                isCurrent: false
+            ),
+            GitReference(
+                name: "fix",
+                fullName: "refs/heads/fix",
+                kind: .localBranch,
+                target: "333333",
+                isCurrent: false
+            )
+        ]
+
+        let tree = ReferenceTreeNode.build(from: references)
+        #expect(tree.map(\.name) == ["feature", "fix"])
+
+        let feature = try #require(tree.first { $0.name == "feature" })
+        #expect(feature.reference == nil)
+        #expect(feature.children.map(\.name) == ["blob-store", "proxy"])
+        #expect(feature.children.first?.reference?.name == "feature/blob-store")
+        #expect(feature.children.last?.children.first?.reference?.name == "feature/proxy/quic")
+
+        let fix = try #require(tree.first { $0.name == "fix" })
+        #expect(fix.reference?.name == "fix")
+        #expect(fix.outlineChildren == nil)
+    }
+
+    @Test
+    func parsesStashAndNulDelimitedWorktreeRecords() {
+        let stashes = GitParser.parseStashes(
+            "stash@{0}\u{1f}abcdef\u{1f}On main: sidebar work\u{1e}\n"
+                + "stash@{1}\u{1f}123456\u{1f}WIP on main: 111111 Initial\u{1e}\n"
+        )
+        #expect(stashes.map(\.selector) == ["stash@{0}", "stash@{1}"])
+        #expect(stashes[0].id == "abcdef")
+        #expect(stashes[0].displayName == "sidebar work")
+        #expect(stashes[1].displayName == "WIP on main: 111111 Initial")
+
+        let root = URL(fileURLWithPath: "/tmp/main repository")
+        let worktreeOutput = """
+        worktree /tmp/main repository\0HEAD abcdef\0branch refs/heads/main\0\0worktree /tmp/linked\0HEAD 123456\0detached\0locked in use\0\0
+        """
+        let worktrees = GitParser.parseWorktrees(worktreeOutput, currentRoot: root)
+
+        #expect(worktrees.count == 2)
+        #expect(worktrees[0].isCurrent)
+        #expect(worktrees[0].branchName == "main")
+        #expect(worktrees[1].displayName == "linked")
+        #expect(worktrees[1].isDetached)
+        #expect(worktrees[1].isLocked)
+    }
+
+    @Test
     func loadsARealRepositorySnapshotAndDiff() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitForkTests-\(UUID().uuidString)")
@@ -137,6 +202,9 @@ struct GitParserTests {
         #expect(snapshot.commits.first?.signature.status == GitSignatureStatus.none)
         #expect(snapshot.changes.first?.path == "README.md")
         #expect(snapshot.changes.first?.isUnstaged == true)
+        #expect(snapshot.stashes.isEmpty)
+        #expect(snapshot.worktrees.count == 1)
+        #expect(snapshot.worktrees[0].isCurrent)
 
         let diff = try await client.diff(
             at: root,
@@ -144,6 +212,50 @@ struct GitParserTests {
             staged: false
         )
         #expect(diff.contains("+Changed"))
+    }
+
+    @Test
+    func loadsStashesAndLinkedWorktreesInRepositorySnapshot() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkSidebarTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("repository")
+        let linked = container.appendingPathComponent("linked-worktree")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "one\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try "two\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["stash", "push", "-m", "sidebar stash"], at: root)
+        try runGit(["worktree", "add", "-b", "feature/linked", linked.path], at: root)
+
+        let client = GitClient()
+        let snapshot = try await client.snapshot(at: root)
+        #expect(snapshot.stashes.count == 1)
+        #expect(snapshot.stashes[0].displayName == "sidebar stash")
+        #expect(snapshot.worktrees.count == 2)
+        #expect(snapshot.worktrees.first(where: \.isCurrent) != nil)
+        #expect(
+            snapshot.worktrees.first {
+                URL(fileURLWithPath: $0.path).resolvingSymlinksInPath()
+                    == linked.resolvingSymlinksInPath()
+            }?.branchName == "feature/linked"
+        )
+        let stashCommit = try await client.commit(
+            at: root,
+            revision: snapshot.stashes[0].selector
+        )
+        #expect(stashCommit.hash == snapshot.stashes[0].hash)
+
+        let state = try await client.stateToken(at: root)
+        #expect(state.stashes.contains("sidebar stash"))
+        #expect(state.worktrees.contains("linked-worktree"))
     }
 
     @Test

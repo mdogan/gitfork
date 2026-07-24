@@ -4,11 +4,15 @@ struct RepositoryStateToken: Equatable, Sendable {
     let status: String
     let stagedDiff: String
     let references: String
+    let stashes: String
+    let worktrees: String
     let workingTreeMetadata: String
 }
 
 struct GitClient: Sendable {
     private let gitURL = URL(fileURLWithPath: "/usr/bin/git")
+    private static let commitFormat =
+        "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%G?%x1f%GK%x1f%GS%x1f%GG%x1f%s%x1e"
 
     func repositoryRoot(from directory: URL) async throws -> URL {
         let result = try await run(["rev-parse", "--show-toplevel"], in: directory)
@@ -24,11 +28,22 @@ struct GitClient: Sendable {
             "--format=%(refname)%1f%(objectname:short)%1f%(objectname)",
             "refs/heads", "refs/remotes", "refs/tags"
         ], in: root)
+        async let stashResult = run([
+            "stash",
+            "list",
+            "--format=%gd%x1f%H%x1f%gs%x1e"
+        ], in: root)
+        async let worktreeResult = run([
+            "worktree",
+            "list",
+            "--porcelain",
+            "-z"
+        ], in: root)
         async let logResult = run([
             "log",
             "--max-count=300",
             "--date=iso-strict",
-            "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%G?%x1f%GK%x1f%GS%x1f%GG%x1f%s%x1e",
+            "--pretty=format:\(Self.commitFormat)",
             revision ?? "--all"
         ], in: root)
 
@@ -52,6 +67,8 @@ struct GitClient: Sendable {
 
         let status = try await statusResult
         let refs = try await refsResult
+        let stashes = try await stashResult
+        let worktrees = try await worktreeResult
         let log = try await logResult
         let upstreamCommand = try await upstreamResult
         let countsCommand = try await countsResult
@@ -68,6 +85,8 @@ struct GitClient: Sendable {
             behind: counts.dropFirst().first ?? 0,
             changes: GitParser.parseStatus(Data(status.output.utf8)),
             references: GitParser.parseReferences(refs.output, currentBranch: branch),
+            stashes: GitParser.parseStashes(stashes.output),
+            worktrees: GitParser.parseWorktrees(worktrees.output, currentRoot: root),
             commits: GitParser.parseCommits(log.output)
         )
     }
@@ -93,15 +112,30 @@ struct GitClient: Sendable {
             "--format=%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)",
             "refs/heads", "refs/remotes", "refs/tags"
         ], in: root)
+        async let stashResult = run([
+            "stash",
+            "list",
+            "--format=%gd%x00%H%x00%gs%x1e"
+        ], in: root)
+        async let worktreeResult = run([
+            "worktree",
+            "list",
+            "--porcelain",
+            "-z"
+        ], in: root)
 
         let status = try await statusResult
         let stagedDiff = try await stagedDiffResult
         let references = try await referencesResult
+        let stashes = try await stashResult
+        let worktrees = try await worktreeResult
 
         return RepositoryStateToken(
             status: status.output,
             stagedDiff: stagedDiff.output,
             references: references.output,
+            stashes: stashes.output,
+            worktrees: worktrees.output,
             workingTreeMetadata: workingTreeMetadata(from: status.output, at: root)
         )
     }
@@ -169,6 +203,23 @@ struct GitClient: Sendable {
             hash
         ], in: root)
         return result.output
+    }
+
+    func commit(at root: URL, revision: String) async throws -> GitCommit {
+        let result = try await run([
+            "log",
+            "--max-count=1",
+            "--date=iso-strict",
+            "--pretty=format:\(Self.commitFormat)",
+            revision
+        ], in: root)
+        guard let commit = GitParser.parseCommits(result.output).first else {
+            throw GitOperationError(
+                command: "git log --max-count=1 \(revision)",
+                message: "Git did not return the selected stash commit."
+            )
+        }
+        return commit
     }
 
     func stage(at root: URL, paths: [String]) async throws {

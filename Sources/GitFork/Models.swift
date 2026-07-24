@@ -46,6 +46,106 @@ struct GitReference: Identifiable, Hashable, Sendable {
     var id: String { fullName }
 }
 
+struct ReferenceTreeNode: Identifiable, Hashable, Sendable {
+    let name: String
+    let path: String
+    let kind: ReferenceKind
+    let reference: GitReference?
+    let children: [ReferenceTreeNode]
+
+    var id: String {
+        "\(kind.rawValue):\(path)"
+    }
+
+    var outlineChildren: [ReferenceTreeNode]? {
+        children.isEmpty ? nil : children
+    }
+
+    static func build(from references: [GitReference]) -> [ReferenceTreeNode] {
+        build(from: references, components: [], depth: 0)
+    }
+
+    private static func build(
+        from references: [GitReference],
+        components: [String],
+        depth: Int
+    ) -> [ReferenceTreeNode] {
+        let grouped = Dictionary(grouping: references) {
+            $0.name.split(separator: "/", omittingEmptySubsequences: false)
+                .map(String.init)[depth]
+        }
+
+        return grouped.map { name, matches in
+            let pathComponents = components + [name]
+            let path = pathComponents.joined(separator: "/")
+            let exact = matches.first {
+                $0.name.split(separator: "/", omittingEmptySubsequences: false).count == depth + 1
+            }
+            let descendants = matches.filter {
+                $0.name.split(separator: "/", omittingEmptySubsequences: false).count > depth + 1
+            }
+
+            return ReferenceTreeNode(
+                name: name,
+                path: path,
+                kind: matches[0].kind,
+                reference: exact,
+                children: descendants.isEmpty
+                    ? []
+                    : build(
+                        from: descendants,
+                        components: pathComponents,
+                        depth: depth + 1
+                    )
+            )
+        }
+        .sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+}
+
+struct GitStash: Identifiable, Hashable, Sendable {
+    let selector: String
+    let hash: String
+    let subject: String
+
+    var id: String { hash }
+
+    var displayName: String {
+        guard subject.hasPrefix("On "),
+              let separator = subject.range(of: ": ") else {
+            return subject
+        }
+        return String(subject[separator.upperBound...])
+    }
+}
+
+struct GitWorktree: Identifiable, Hashable, Sendable {
+    let path: String
+    let head: String?
+    let branch: String?
+    let isBare: Bool
+    let isDetached: Bool
+    let isLocked: Bool
+    let isPrunable: Bool
+    let isCurrent: Bool
+
+    var id: String { path }
+
+    var displayName: String {
+        URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    var branchName: String? {
+        branch.map {
+            $0.hasPrefix("refs/heads/")
+                ? String($0.dropFirst("refs/heads/".count))
+                : $0
+        }
+    }
+}
+
 enum GitSignatureStatus: Character, Hashable, Sendable {
     case good = "G"
     case bad = "B"
@@ -174,6 +274,8 @@ struct RepositorySnapshot: Sendable {
     let behind: Int
     let changes: [WorkingChange]
     let references: [GitReference]
+    let stashes: [GitStash]
+    let worktrees: [GitWorktree]
     let commits: [GitCommit]
 }
 
@@ -329,5 +431,69 @@ enum GitParser {
             }
             return $0.kind.rawValue < $1.kind.rawValue
         }
+    }
+
+    static func parseStashes(_ text: String) -> [GitStash] {
+        text.split(separator: "\u{1e}", omittingEmptySubsequences: true)
+            .compactMap { record in
+                let fields = record
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .components(separatedBy: "\u{1f}")
+                guard fields.count >= 3 else { return nil }
+                return GitStash(
+                    selector: fields[0],
+                    hash: fields[1],
+                    subject: fields[2]
+                )
+            }
+    }
+
+    static func parseWorktrees(_ text: String, currentRoot: URL) -> [GitWorktree] {
+        var worktrees: [GitWorktree] = []
+        var attributes: [String: String] = [:]
+
+        func finishRecord() {
+            guard let path = attributes["worktree"] else {
+                attributes.removeAll(keepingCapacity: true)
+                return
+            }
+            let candidate = URL(fileURLWithPath: path)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+            worktrees.append(
+                GitWorktree(
+                    path: path,
+                    head: attributes["HEAD"],
+                    branch: attributes["branch"],
+                    isBare: attributes.keys.contains("bare"),
+                    isDetached: attributes.keys.contains("detached"),
+                    isLocked: attributes.keys.contains("locked"),
+                    isPrunable: attributes.keys.contains("prunable"),
+                    isCurrent: candidate
+                        == currentRoot.resolvingSymlinksInPath().standardizedFileURL
+                )
+            )
+            attributes.removeAll(keepingCapacity: true)
+        }
+
+        for field in text.components(separatedBy: "\0") {
+            guard !field.isEmpty else {
+                if !attributes.isEmpty {
+                    finishRecord()
+                }
+                continue
+            }
+
+            if let separator = field.firstIndex(of: " ") {
+                attributes[String(field[..<separator])] = String(field[field.index(after: separator)...])
+            } else {
+                attributes[field] = ""
+            }
+        }
+
+        if !attributes.isEmpty {
+            finishRecord()
+        }
+        return worktrees
     }
 }

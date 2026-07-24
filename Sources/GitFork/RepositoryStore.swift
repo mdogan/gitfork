@@ -11,6 +11,8 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var behind = 0
     @Published private(set) var changes: [WorkingChange] = []
     @Published private(set) var references: [GitReference] = []
+    @Published private(set) var stashes: [GitStash] = []
+    @Published private(set) var worktrees: [GitWorktree] = []
     @Published private(set) var commits: [GitCommit] = []
     @Published private(set) var diff = ""
     @Published private(set) var isLoading = false
@@ -20,6 +22,7 @@ final class RepositoryStore: ObservableObject {
     @Published var selectedChange: WorkingChange?
     @Published var selectedChangeIsStaged = false
     @Published var selectedReference: GitReference?
+    @Published var selectedStash: GitStash?
     @Published var searchText = ""
     @Published var commitMessage = ""
     @Published var amend = false
@@ -69,12 +72,6 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
-    var groupedReferences: [(ReferenceKind, [GitReference])] {
-        ReferenceKind.allCasesCompat.map { kind in
-            (kind, references.filter { $0.kind == kind })
-        }
-    }
-
     func chooseRepository() {
         let panel = NSOpenPanel()
         panel.title = "Open Git Repository"
@@ -97,6 +94,7 @@ final class RepositoryStore: ObservableObject {
                 self.repositoryURL = root
                 self.remember(root)
                 self.selectedReference = nil
+                self.selectedStash = nil
                 self.selectedSection = .history
                 try await self.reload(root: root)
                 self.startMonitoring(root: root)
@@ -122,6 +120,11 @@ final class RepositoryStore: ObservableObject {
     }
 
     func selectCommit(_ commit: GitCommit?) {
+        selectedStash = nil
+        showCommit(commit)
+    }
+
+    private func showCommit(_ commit: GitCommit?) {
         selectedCommit = commit
         selectedChange = nil
         guard let root = repositoryURL, let commit else {
@@ -144,6 +147,7 @@ final class RepositoryStore: ObservableObject {
     }
 
     func selectChange(_ change: WorkingChange?, staged: Bool) {
+        selectedStash = nil
         selectedChange = change
         selectedChangeIsStaged = staged
         selectedCommit = nil
@@ -167,12 +171,30 @@ final class RepositoryStore: ObservableObject {
     }
 
     func selectReference(_ reference: GitReference?) {
+        selectedStash = nil
         selectedReference = reference
         selectedSection = .history
         guard let root = repositoryURL else { return }
         Task {
             await perform("Loading \(reference?.name ?? "history")") {
                 try await self.reload(root: root, revision: reference?.fullName)
+            }
+        }
+    }
+
+    func selectStash(_ stash: GitStash) {
+        selectedStash = stash
+        selectedReference = nil
+        selectedSection = .history
+        guard let root = repositoryURL else { return }
+        Task {
+            await perform("Loading \(stash.displayName)") {
+                let commit = try await self.client.commit(
+                    at: root,
+                    revision: stash.selector
+                )
+                guard self.selectedStash?.id == stash.id else { return }
+                self.showCommit(commit)
             }
         }
     }
@@ -368,17 +390,29 @@ final class RepositoryStore: ObservableObject {
         behind = snapshot.behind
         changes = snapshot.changes
         references = snapshot.references
+        stashes = snapshot.stashes
+        worktrees = snapshot.worktrees
         commits = snapshot.commits
 
-        if let selectedCommit,
-           let replacement = commits.first(where: { $0.hash == selectedCommit.hash }) {
-            self.selectedCommit = replacement
+        if let selectedStash,
+           let replacement = stashes.first(where: { $0.id == selectedStash.id }) {
+            self.selectedStash = replacement
+            self.selectedCommit = try await client.commit(
+                at: root,
+                revision: replacement.selector
+            )
         } else {
-            selectedCommit = commits.first
+            selectedStash = nil
+            if let selectedCommit,
+               let replacement = commits.first(where: { $0.hash == selectedCommit.hash }) {
+                self.selectedCommit = replacement
+            } else {
+                selectedCommit = commits.first
+            }
         }
 
         if selectedSection == .history {
-            selectCommit(selectedCommit)
+            showCommit(selectedCommit)
         } else if let selectedChange {
             let replacement = changes.first(where: { $0.path == selectedChange.path })
             if selectedChangeIsStaged, replacement?.isStaged == true {
@@ -420,8 +454,4 @@ final class RepositoryStore: ObservableObject {
         recentRepositories = Array(recentRepositories.prefix(8))
         UserDefaults.standard.set(recentRepositories.map(\.path), forKey: recentKey)
     }
-}
-
-private extension ReferenceKind {
-    static let allCasesCompat: [ReferenceKind] = [.localBranch, .remoteBranch, .tag]
 }

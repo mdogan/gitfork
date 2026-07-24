@@ -60,6 +60,8 @@ Once installed, run the helper from anywhere inside a Git repository:
 
 ```sh
 fork
+fork .
+fork ./foobar
 fork open
 fork open /path/to/repository
 fork --help

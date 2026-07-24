@@ -13,6 +13,7 @@ enum GitForkHoverButtonVariant {
     case icon
     case text
     case row(isSelected: Bool)
+    case compactRow(isSelected: Bool)
 }
 
 struct GitForkHoverButtonStyle: ButtonStyle {
@@ -67,8 +68,10 @@ private struct GitForkHoverButtonBody<Label: View>: View {
     }
 
     private var expandsHorizontally: Bool {
-        if case .row = variant { return true }
-        return false
+        switch variant {
+        case .row, .compactRow: true
+        default: false
+        }
     }
 
     private var horizontalPadding: CGFloat {
@@ -77,6 +80,7 @@ private struct GitForkHoverButtonBody<Label: View>: View {
         case .icon: 5
         case .text: 6
         case .row: 7
+        case .compactRow: 5
         }
     }
 
@@ -86,12 +90,14 @@ private struct GitForkHoverButtonBody<Label: View>: View {
         case .icon: 4
         case .text: 3
         case .row: 5
+        case .compactRow: 2
         }
     }
 
     private var cornerRadius: CGFloat {
         switch variant {
         case .row: 7
+        case .compactRow: 6
         default: 6
         }
     }
@@ -102,7 +108,7 @@ private struct GitForkHoverButtonBody<Label: View>: View {
         }
 
         switch variant {
-        case let .row(isSelected):
+        case let .row(isSelected), let .compactRow(isSelected):
             if isSelected {
                 return GitForkTheme.accent.opacity(isHovering ? 0.21 : 0.13)
             }
@@ -123,7 +129,7 @@ private struct GitForkHoverButtonBody<Label: View>: View {
     private var borderColor: Color {
         guard isHovering && isEnabled else { return .clear }
         switch variant {
-        case .row:
+        case .row, .compactRow:
             return GitForkTheme.accent.opacity(0.24)
         case .toolbarAction, .icon, .text:
             return GitForkTheme.accent.opacity(0.34)

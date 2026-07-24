@@ -189,6 +189,30 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func stage(_ patch: String, in change: WorkingChange) {
+        mutate("Staging selected lines in \(change.path)") { root in
+            try await self.client.stage(at: root, patch: patch)
+        }
+    }
+
+    func unstage(_ patch: String, in change: WorkingChange) {
+        mutate("Unstaging selected lines in \(change.path)") { root in
+            try await self.client.unstage(at: root, patch: patch)
+        }
+    }
+
+    func discard(_ patch: String, in change: WorkingChange) {
+        mutate("Discarding selected lines in \(change.path)") { root in
+            try await self.client.discard(at: root, patch: patch)
+        }
+    }
+
+    func discard(_ change: WorkingChange) {
+        mutate("Discarding changes in \(change.path)") { root in
+            try await self.client.discard(at: root, change: change)
+        }
+    }
+
     func stageAll() {
         mutate("Staging all changes") { root in
             try await self.client.stage(at: root, paths: self.unstagedChanges.map(\.path))
@@ -357,7 +381,15 @@ final class RepositoryStore: ObservableObject {
             selectCommit(selectedCommit)
         } else if let selectedChange {
             let replacement = changes.first(where: { $0.path == selectedChange.path })
-            selectChange(replacement, staged: selectedChangeIsStaged)
+            if selectedChangeIsStaged, replacement?.isStaged == true {
+                selectChange(replacement, staged: true)
+            } else if !selectedChangeIsStaged, replacement?.isUnstaged == true {
+                selectChange(replacement, staged: false)
+            } else if let replacement {
+                selectChange(replacement, staged: replacement.isStaged)
+            } else {
+                selectChange(nil, staged: false)
+            }
         }
     }
 

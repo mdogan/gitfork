@@ -6,6 +6,8 @@ struct ForkCommandTests {
     @Test
     func parsesDocumentedCommands() throws {
         #expect(try ForkCommand.parse(arguments: []) == .open(path: nil))
+        #expect(try ForkCommand.parse(arguments: ["."]) == .open(path: "."))
+        #expect(try ForkCommand.parse(arguments: ["./foobar"]) == .open(path: "./foobar"))
         #expect(try ForkCommand.parse(arguments: ["open"]) == .open(path: nil))
         #expect(try ForkCommand.parse(arguments: ["open", "../repo"]) == .open(path: "../repo"))
         #expect(try ForkCommand.parse(arguments: ["--help"]) == .help)
@@ -13,18 +15,23 @@ struct ForkCommandTests {
     }
 
     @Test
-    func rejectsUnknownCommandsAndExtraArguments() {
+    func rejectsUnknownOptionsAndExtraArguments() {
         #expect(throws: ForkCommandError.self) {
-            try ForkCommand.parse(arguments: ["checkout"])
+            try ForkCommand.parse(arguments: ["--unknown"])
         }
         #expect(throws: ForkCommandError.self) {
             try ForkCommand.parse(arguments: ["open", "one", "two"])
+        }
+        #expect(throws: ForkCommandError.self) {
+            try ForkCommand.parse(arguments: ["one", "two"])
         }
     }
 
     @Test
     func helpContainsThePublicCommandSurface() {
         #expect(ForkCommand.usage.contains("usage: fork"))
+        #expect(ForkCommand.usage.contains("fork ."))
+        #expect(ForkCommand.usage.contains("fork ./foobar"))
         #expect(ForkCommand.usage.contains("fork open"))
         #expect(ForkCommand.usage.contains("fork --help"))
         #expect(ForkCommand.usage.contains("fork --version"))
@@ -58,6 +65,29 @@ struct ForkCommandTests {
             currentDirectory: FileManager.default.temporaryDirectory
         )
         #expect(discovered == root.standardizedFileURL)
+    }
+
+    @Test
+    func discoversRepositoryFromRelativeDirectoryArgument() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ForkCLIRelativePathTests-\(UUID().uuidString)")
+        let nested = root.appendingPathComponent("foobar")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+
+        let currentDirectory = try ForkCommand.repositoryRoot(
+            path: ".",
+            currentDirectory: root
+        )
+        let nestedDirectory = try ForkCommand.repositoryRoot(
+            path: "./foobar",
+            currentDirectory: root
+        )
+
+        #expect(currentDirectory == root.standardizedFileURL)
+        #expect(nestedDirectory == root.standardizedFileURL)
     }
 
     private func runGit(_ arguments: [String], at root: URL) throws {

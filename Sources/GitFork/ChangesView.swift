@@ -21,30 +21,40 @@ private struct ChangeList: View {
 
     var body: some View {
         List {
-            if !store.stagedChanges.isEmpty {
+            if !store.changes.isEmpty {
                 Section {
-                    ForEach(store.stagedChanges) { change in
-                        ChangeRow(change: change, staged: true)
+                    if store.stagedChanges.isEmpty {
+                        EmptyChangeRow(title: "No staged changes")
+                    } else {
+                        ForEach(store.stagedChanges.map { PresentedChange($0, staged: true) }) { item in
+                            ChangeRow(change: item.change, staged: item.staged)
+                        }
                     }
                 } header: {
                     ChangeSectionHeader(
                         title: "Staged Changes",
                         count: store.stagedChanges.count,
+                        systemImage: "checkmark.circle.fill",
+                        tint: GitForkTheme.green,
                         actionTitle: "Unstage All",
                         action: store.unstageAll
                     )
                 }
-            }
 
-            if !store.unstagedChanges.isEmpty {
                 Section {
-                    ForEach(store.unstagedChanges) { change in
-                        ChangeRow(change: change, staged: false)
+                    if store.unstagedChanges.isEmpty {
+                        EmptyChangeRow(title: "No unstaged changes")
+                    } else {
+                        ForEach(store.unstagedChanges.map { PresentedChange($0, staged: false) }) { item in
+                            ChangeRow(change: item.change, staged: item.staged)
+                        }
                     }
                 } header: {
                     ChangeSectionHeader(
-                        title: "Changes",
+                        title: "Unstaged Changes",
                         count: store.unstagedChanges.count,
+                        systemImage: "pencil.circle.fill",
+                        tint: GitForkTheme.accent,
                         actionTitle: "Stage All",
                         action: store.stageAll
                     )
@@ -52,6 +62,7 @@ private struct ChangeList: View {
             }
         }
         .listStyle(.inset)
+        .environment(\.defaultMinListRowHeight, 26)
         .overlay {
             if store.changes.isEmpty {
                 ContentUnavailableView(
@@ -64,25 +75,71 @@ private struct ChangeList: View {
     }
 }
 
+private struct PresentedChange: Identifiable {
+    let change: WorkingChange
+    let staged: Bool
+
+    init(_ change: WorkingChange, staged: Bool) {
+        self.change = change
+        self.staged = staged
+    }
+
+    var id: String {
+        "\(staged ? "staged" : "unstaged")|\(change.id)"
+    }
+}
+
 private struct ChangeSectionHeader: View {
     let title: String
     let count: Int
+    let systemImage: String
+    let tint: Color
     let actionTitle: String
     let action: () -> Void
 
     var body: some View {
-        HStack {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.caption)
+                .foregroundStyle(tint)
             Text(title)
+                .font(.caption.weight(.semibold))
             Text("\(count)")
-                .foregroundStyle(.secondary)
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(tint.opacity(0.13), in: Capsule())
             Spacer()
             Button(actionTitle, action: action)
-                .font(.caption)
+                .font(.caption2)
                 .textCase(nil)
                 .buttonStyle(GitForkHoverButtonStyle(.text))
-                .foregroundStyle(GitForkTheme.accent)
+                .foregroundStyle(tint)
                 .help(actionTitle)
+                .disabled(count == 0)
         }
+        .textCase(nil)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(tint.opacity(0.18))
+        }
+    }
+}
+
+private struct EmptyChangeRow: View {
+    let title: String
+
+    var body: some View {
+        Label(title, systemImage: "tray")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 3)
+            .listRowInsets(EdgeInsets(top: 1, leading: 7, bottom: 1, trailing: 7))
+            .listRowBackground(Color.clear)
     }
 }
 
@@ -92,27 +149,22 @@ private struct ChangeRow: View {
     let staged: Bool
 
     var body: some View {
+        let statusSymbol = change.statusSymbol(staged: staged)
         Button {
             store.selectChange(change, staged: staged)
         } label: {
-            HStack(spacing: 9) {
-                Text(change.statusSymbol)
-                    .font(.caption.monospaced().weight(.bold))
-                    .foregroundStyle(Color.statusColor(change.statusSymbol))
-                    .frame(width: 20, height: 20)
-                    .background(Color.statusColor(change.statusSymbol).opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+            HStack(spacing: 7) {
+                Text(statusSymbol)
+                    .font(.caption2.monospaced().weight(.bold))
+                    .foregroundStyle(Color.statusColor(statusSymbol))
+                    .frame(width: 18, height: 18)
+                    .background(Color.statusColor(statusSymbol).opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(URL(fileURLWithPath: change.path).lastPathComponent)
-                        .lineLimit(1)
-                    let directory = URL(fileURLWithPath: change.path).deletingLastPathComponent().path
-                    if directory != "." && directory != "/" {
-                        Text(directory)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
+                Text(change.path)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
 
                 Spacer()
 
@@ -120,24 +172,24 @@ private struct ChangeRow: View {
                     staged ? store.unstage(change) : store.stage(change)
                 } label: {
                     Image(systemName: staged ? "minus" : "plus")
-                        .frame(width: 19, height: 19)
+                        .frame(width: 16, height: 16)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(GitForkHoverButtonStyle(.icon))
                 .help(staged ? "Unstage" : "Stage")
             }
             .contentShape(Rectangle())
-            .padding(.vertical, 2)
         }
         .buttonStyle(
             GitForkHoverButtonStyle(
-                .row(
+                .compactRow(
                     isSelected: store.selectedChange == change
                         && store.selectedChangeIsStaged == staged
                 )
             )
         )
         .help("View \(staged ? "staged" : "working tree") diff for \(change.path)")
+        .listRowInsets(EdgeInsets(top: 1, leading: 7, bottom: 1, trailing: 7))
         .listRowBackground(Color.clear)
     }
 }

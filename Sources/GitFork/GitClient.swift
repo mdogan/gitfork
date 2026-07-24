@@ -115,15 +115,24 @@ struct GitClient: Sendable {
 
         let result = try await run(arguments, in: root)
         if result.output.isEmpty && change.isUntracked {
-            let fileURL = root.appendingPathComponent(change.path)
-            guard let contents = try? String(contentsOf: fileURL, encoding: .utf8) else {
-                return "Binary or unreadable untracked file."
+            let untrackedDiff = try await runAllowingFailure([
+                "diff",
+                "--no-index",
+                "--no-ext-diff",
+                "--no-color",
+                "--",
+                "/dev/null",
+                change.path
+            ], in: root)
+            guard untrackedDiff.exitCode <= 1 else {
+                throw GitOperationError(
+                    command: "git diff --no-index -- /dev/null \(change.path)",
+                    message: untrackedDiff.error.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
             }
-            return contents
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .enumerated()
-                .map { "+\($0.offset + 1)  \($0.element)" }
-                .joined(separator: "\n")
+            return untrackedDiff.output.isEmpty
+                ? "No textual changes."
+                : untrackedDiff.output
         }
         return result.output.isEmpty ? "No textual changes." : result.output
     }
@@ -172,6 +181,26 @@ struct GitClient: Sendable {
         let restore = try await runAllowingFailure(["restore", "--staged", "--"] + paths, in: root)
         if restore.exitCode != 0 {
             _ = try await run(["rm", "--cached", "--ignore-unmatch", "--"] + paths, in: root)
+        }
+    }
+
+    func stage(at root: URL, patch: String) async throws {
+        try await apply(patch, at: root, cached: true, reverse: false)
+    }
+
+    func unstage(at root: URL, patch: String) async throws {
+        try await apply(patch, at: root, cached: true, reverse: true)
+    }
+
+    func discard(at root: URL, patch: String) async throws {
+        try await apply(patch, at: root, cached: false, reverse: true)
+    }
+
+    func discard(at root: URL, change: WorkingChange) async throws {
+        if change.isUntracked {
+            _ = try await run(["clean", "-f", "--", change.path], in: root)
+        } else {
+            _ = try await run(["restore", "--worktree", "--", change.path], in: root)
         }
     }
 
@@ -381,11 +410,31 @@ struct GitClient: Sendable {
         _ = try await run(["stash", "push", "--include-untracked", "-m", message], in: root)
     }
 
+    private func apply(
+        _ patch: String,
+        at root: URL,
+        cached: Bool,
+        reverse: Bool
+    ) async throws {
+        let patchData = Data(patch.utf8)
+        var arguments = ["apply", "--recount"]
+        if cached {
+            arguments.append("--cached")
+        }
+        if reverse {
+            arguments.append("--reverse")
+        }
+
+        _ = try await run(arguments + ["--check", "-"], in: root, input: patchData)
+        _ = try await run(arguments + ["-"], in: root, input: patchData)
+    }
+
     private func run(
         _ arguments: [String],
-        in directory: URL
+        in directory: URL,
+        input: Data? = nil
     ) async throws -> GitCommandResult {
-        let result = try await execute(arguments, in: directory)
+        let result = try await execute(arguments, in: directory, input: input)
         guard result.exitCode == 0 else {
             throw GitOperationError(
                 command: "git \(arguments.joined(separator: " "))",
@@ -399,23 +448,26 @@ struct GitClient: Sendable {
         _ arguments: [String],
         in directory: URL
     ) async throws -> GitCommandResult {
-        try await execute(arguments, in: directory)
+        try await execute(arguments, in: directory, input: nil)
     }
 
     private func execute(
         _ arguments: [String],
-        in directory: URL
+        in directory: URL,
+        input: Data?
     ) async throws -> GitCommandResult {
         let gitURL = self.gitURL
         return try await Task.detached(priority: .userInitiated) {
             let process = Process()
             let outputPipe = Pipe()
             let errorPipe = Pipe()
+            let inputPipe = input == nil ? nil : Pipe()
             process.executableURL = gitURL
             process.arguments = arguments
             process.currentDirectoryURL = directory
             process.standardOutput = outputPipe
             process.standardError = errorPipe
+            process.standardInput = inputPipe
 
             var environment = ProcessInfo.processInfo.environment
             environment["LC_ALL"] = "C"
@@ -426,6 +478,11 @@ struct GitClient: Sendable {
             process.environment = environment
 
             try process.run()
+
+            if let input, let inputPipe {
+                inputPipe.fileHandleForWriting.write(input)
+                try inputPipe.fileHandleForWriting.close()
+            }
 
             let outputTask = Task.detached {
                 outputPipe.fileHandleForReading.readDataToEndOfFile()

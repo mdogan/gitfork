@@ -140,7 +140,11 @@ struct WorkingChange: Identifiable, Hashable, Sendable {
     }
 
     var displayStatus: String {
-        let status = isStaged ? indexStatus : workTreeStatus
+        displayStatus(staged: isStaged)
+    }
+
+    func displayStatus(staged: Bool) -> String {
+        let status = staged ? indexStatus : workTreeStatus
         return switch status {
         case "A", "?": "Added"
         case "M": "Modified"
@@ -153,7 +157,11 @@ struct WorkingChange: Identifiable, Hashable, Sendable {
     }
 
     var statusSymbol: String {
-        let status = isStaged ? indexStatus : workTreeStatus
+        statusSymbol(staged: isStaged)
+    }
+
+    func statusSymbol(staged: Bool) -> String {
+        let status = staged ? indexStatus : workTreeStatus
         return status == "?" ? "A" : String(status)
     }
 }

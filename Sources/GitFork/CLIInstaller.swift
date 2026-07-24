@@ -295,7 +295,7 @@ struct CLIInstallerView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                Text("fork\nfork open\nfork --help")
+                Text("fork\nfork .\nfork ./foobar\nfork open\nfork --help")
                     .font(.body.monospaced())
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

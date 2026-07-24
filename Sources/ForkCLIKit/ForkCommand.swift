@@ -22,11 +22,13 @@ public enum ForkCommand {
     public static let version = "0.1.0"
 
     public static let usage = """
-    usage: fork [<options>] <command> [<args>]
+    usage: fork [<options>] [<directory>]
 
     These are common Fork commands:
-        fork open           open current repository in Fork
-        fork                same as 'fork open'
+        fork                open current repository in Fork
+        fork .              open repository containing current directory
+        fork ./foobar       open repository containing ./foobar
+        fork open [<path>]  explicit form of the same command
 
         fork --help         show this help
         fork --version      show version of Fork CLI helper
@@ -66,10 +68,19 @@ public enum ForkCommand {
             return .open(path: arguments.dropFirst().first)
 
         default:
-            throw ForkCommandError(
-                "Unknown command '\(first)'.",
-                shouldShowUsage: true
-            )
+            guard arguments.count == 1 else {
+                throw ForkCommandError(
+                    "usage: fork [<directory>]",
+                    shouldShowUsage: true
+                )
+            }
+            guard !first.hasPrefix("-") else {
+                throw ForkCommandError(
+                    "Unknown option '\(first)'.",
+                    shouldShowUsage: true
+                )
+            }
+            return .open(path: first)
         }
     }
 

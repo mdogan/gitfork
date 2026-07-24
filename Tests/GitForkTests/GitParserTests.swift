@@ -16,6 +16,52 @@ struct GitParserTests {
     }
 
     @Test
+    func presentsDualStateChangeAccordingToItsSection() {
+        let change = WorkingChange(
+            path: "dual-state.swift",
+            originalPath: nil,
+            indexStatus: "A",
+            workTreeStatus: "M"
+        )
+
+        #expect(change.statusSymbol(staged: true) == "A")
+        #expect(change.displayStatus(staged: true) == "Added")
+        #expect(change.statusSymbol(staged: false) == "M")
+        #expect(change.displayStatus(staged: false) == "Modified")
+    }
+
+    @Test
+    func groupsDisplayHunksAndTracksOldAndNewLineNumbers() throws {
+        let diff = """
+        diff --git a/file.swift b/file.swift
+        index 1111111..2222222 100644
+        --- a/file.swift
+        +++ b/file.swift
+        @@ -10,3 +10,4 @@
+         context before
+        -old value
+        +new value
+        +extra value
+         context after
+        """
+        let document = UnifiedDiff(diff)
+        let hunk = try #require(document.displayHunks.first)
+
+        #expect(document.displayHunks.count == 1)
+        #expect(hunk.header.text == "@@ -10,3 +10,4 @@")
+        #expect(hunk.lines.map(\.text) == [
+            " context before",
+            "-old value",
+            "+new value",
+            "+extra value",
+            " context after"
+        ])
+        #expect(hunk.lines.map(\.oldLineNumber) == [10, 11, nil, nil, 12])
+        #expect(hunk.lines.map(\.newLineNumber) == [10, nil, 11, 12, 13])
+        #expect(hunk.selectableLineIDs.count == 3)
+    }
+
+    @Test
     func parsesCommitRecords() {
         let input = "abcdef123456\u{1f}111111 222222\u{1f}Ada Lovelace\u{1f}ada@example.com\u{1f}2026-07-23T10:30:00+03:00\u{1f}HEAD -> main, tag: v1.0\u{1f}G\u{1f}ABCDEF1234567890\u{1f}Ada Lovelace\u{1f}Good signature\u{1f}Ship native client\u{1e}"
         let commits = GitParser.parseCommits(input)
@@ -130,6 +176,193 @@ struct GitParserTests {
         try runGit(["branch", "feature/live-refresh"], at: root)
         let withBranch = try await client.stateToken(at: root)
         #expect(withBranch != editedAgain)
+    }
+
+    @Test
+    func appliesSelectedLinesAcrossHunksAndDiscardsACompleteTrackedFile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkPartialPatchTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let file = root.appendingPathComponent("lines.txt")
+        let originalLines = (1...20).map { "line \($0)" }
+        try (originalLines.joined(separator: "\n") + "\n")
+            .write(to: file, atomically: true, encoding: .utf8)
+        try runGit(["add", "lines.txt"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        var editedLines = originalLines
+        editedLines[1] = "LINE 2"
+        editedLines[14] = "LINE 15"
+        try (editedLines.joined(separator: "\n") + "\n")
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        let client = GitClient()
+        var snapshot = try await client.snapshot(at: root)
+        var change = try #require(snapshot.changes.first { $0.path == "lines.txt" })
+        let workingDiff = try await client.diff(at: root, change: change, staged: false)
+        let workingDocument = UnifiedDiff(workingDiff)
+        let allEditedLines = selectedLineIDs(
+            in: workingDocument,
+            matching: ["-line 2", "+LINE 2", "-line 15", "+LINE 15"]
+        )
+        #expect(allEditedLines.count == 4)
+
+        let stagePatch = try #require(
+            workingDocument.partialPatch(
+                selecting: allEditedLines,
+                direction: .forward
+            )
+        )
+        try await client.stage(at: root, patch: stagePatch)
+        let stagedAfterStage = try runGitOutput(["diff", "--cached"], at: root)
+        #expect(stagedAfterStage.contains("+LINE 2"))
+        #expect(stagedAfterStage.contains("+LINE 15"))
+
+        snapshot = try await client.snapshot(at: root)
+        change = try #require(snapshot.changes.first { $0.path == "lines.txt" })
+        let stagedDiff = try await client.diff(at: root, change: change, staged: true)
+        let stagedDocument = UnifiedDiff(stagedDiff)
+        let firstReplacement = selectedLineIDs(
+            in: stagedDocument,
+            matching: ["-line 2", "+LINE 2"]
+        )
+        let unstagePatch = try #require(
+            stagedDocument.partialPatch(
+                selecting: firstReplacement,
+                direction: .reverse
+            )
+        )
+        try await client.unstage(at: root, patch: unstagePatch)
+        let stagedAfterUnstage = try runGitOutput(["diff", "--cached"], at: root)
+        #expect(!stagedAfterUnstage.contains("+LINE 2"))
+        #expect(stagedAfterUnstage.contains("+LINE 15"))
+
+        snapshot = try await client.snapshot(at: root)
+        change = try #require(snapshot.changes.first { $0.path == "lines.txt" })
+        let remainingWorkingDiff = try await client.diff(
+            at: root,
+            change: change,
+            staged: false
+        )
+        let remainingDocument = UnifiedDiff(remainingWorkingDiff)
+        let discardSelection = selectedLineIDs(
+            in: remainingDocument,
+            matching: ["-line 2", "+LINE 2"]
+        )
+        let discardPatch = try #require(
+            remainingDocument.partialPatch(
+                selecting: discardSelection,
+                direction: .reverse
+            )
+        )
+        try await client.discard(at: root, patch: discardPatch)
+
+        var contents = try String(contentsOf: file, encoding: .utf8)
+        #expect(contents.contains("line 2\n"))
+        #expect(contents.contains("LINE 15\n"))
+
+        contents += "unstaged tail\n"
+        try contents.write(to: file, atomically: true, encoding: .utf8)
+        snapshot = try await client.snapshot(at: root)
+        change = try #require(snapshot.changes.first { $0.path == "lines.txt" })
+        try await client.discard(at: root, change: change)
+
+        let restored = try String(contentsOf: file, encoding: .utf8)
+        #expect(!restored.contains("unstaged tail"))
+        #expect(restored.contains("LINE 15\n"))
+    }
+
+    @Test
+    func partiallyStagesAndDiscardsUntrackedFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkUntrackedPatchTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        let client = GitClient()
+
+        let stagedFile = root.appendingPathComponent("partial.txt")
+        try "alpha\nbeta\ngamma\n".write(
+            to: stagedFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        var snapshot = try await client.snapshot(at: root)
+        var change = try #require(snapshot.changes.first { $0.path == "partial.txt" })
+        let untrackedDiff = try await client.diff(at: root, change: change, staged: false)
+        let untrackedDocument = UnifiedDiff(untrackedDiff)
+        let betaLine = selectedLineIDs(in: untrackedDocument, matching: ["+beta"])
+        let stagePatch = try #require(
+            untrackedDocument.partialPatch(selecting: betaLine, direction: .forward)
+        )
+        try await client.stage(at: root, patch: stagePatch)
+        #expect(try runGitOutput(["show", ":partial.txt"], at: root) == "beta\n")
+        #expect(try String(contentsOf: stagedFile, encoding: .utf8) == "alpha\nbeta\ngamma\n")
+
+        let fullyStagedFile = root.appendingPathComponent("full staged.txt")
+        try "one\ntwo\nthree\n".write(
+            to: fullyStagedFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        try await client.stage(at: root, paths: ["full staged.txt"])
+        snapshot = try await client.snapshot(at: root)
+        change = try #require(snapshot.changes.first { $0.path == "full staged.txt" })
+        let fullyStagedDiff = try await client.diff(at: root, change: change, staged: true)
+        let fullyStagedDocument = UnifiedDiff(fullyStagedDiff)
+        let stagedMiddleLine = selectedLineIDs(
+            in: fullyStagedDocument,
+            matching: ["+two"]
+        )
+        let partialUnstagePatch = try #require(
+            fullyStagedDocument.partialPatch(
+                selecting: stagedMiddleLine,
+                direction: .reverse,
+                treatNewFileAsExisting: true
+            )
+        )
+        try await client.unstage(at: root, patch: partialUnstagePatch)
+        #expect(
+            try runGitOutput(["show", ":full staged.txt"], at: root)
+                == "one\nthree\n"
+        )
+        #expect(
+            try String(contentsOf: fullyStagedFile, encoding: .utf8)
+                == "one\ntwo\nthree\n"
+        )
+
+        let discardedFile = root.appendingPathComponent("discard.txt")
+        try "one\ntwo\nthree\n".write(
+            to: discardedFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        snapshot = try await client.snapshot(at: root)
+        change = try #require(snapshot.changes.first { $0.path == "discard.txt" })
+        let discardDiff = try await client.diff(at: root, change: change, staged: false)
+        let discardDocument = UnifiedDiff(discardDiff)
+        let middleLine = selectedLineIDs(in: discardDocument, matching: ["+two"])
+        let discardPatch = try #require(
+            discardDocument.partialPatch(
+                selecting: middleLine,
+                direction: .reverse,
+                treatNewFileAsExisting: true
+            )
+        )
+        try await client.discard(at: root, patch: discardPatch)
+        #expect(try String(contentsOf: discardedFile, encoding: .utf8) == "one\nthree\n")
+
+        snapshot = try await client.snapshot(at: root)
+        change = try #require(snapshot.changes.first { $0.path == "discard.txt" })
+        try await client.discard(at: root, change: change)
+        #expect(!FileManager.default.fileExists(atPath: discardedFile.path))
     }
 
     @Test
@@ -263,11 +496,21 @@ struct GitParserTests {
     }
 
     private func runGit(_ arguments: [String], at root: URL) throws {
+        _ = try runGitCommand(arguments, at: root)
+    }
+
+    private func runGitOutput(_ arguments: [String], at root: URL) throws -> String {
+        try runGitCommand(arguments, at: root)
+    }
+
+    private func runGitCommand(_ arguments: [String], at root: URL) throws -> String {
         let process = Process()
+        let output = Pipe()
         let errors = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = root
+        process.standardOutput = output
         process.standardError = errors
         try process.run()
         process.waitUntilExit()
@@ -279,5 +522,17 @@ struct GitParserTests {
             )
             throw GitOperationError(command: "git \(arguments.joined(separator: " "))", message: message)
         }
+
+        return String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(),
+            as: UTF8.self
+        )
+    }
+
+    private func selectedLineIDs(
+        in document: UnifiedDiff,
+        matching texts: Set<String>
+    ) -> Set<Int> {
+        Set(document.lines.filter { texts.contains($0.text) }.map(\.id))
     }
 }

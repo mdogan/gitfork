@@ -26,6 +26,16 @@ struct ChangeEntry: Hashable, Identifiable, Sendable {
     }
 }
 
+enum ChangeSelectionKey: Sendable {
+    case returnKey
+    case deleteKey
+}
+
+enum ChangeSelectionAction: Sendable {
+    case stage
+    case unstage
+}
+
 extension Array where Element == ChangeEntry {
     /// Rows listed under "Unstaged Changes": the ones `git add` and a discard
     /// apply to.
@@ -58,6 +68,20 @@ struct ChangeSelectionModel: Equatable, Sendable {
 
     func contains(_ id: ChangeEntryID) -> Bool {
         selected.contains(id)
+    }
+
+    /// Return stages from the unstaged section; Delete unstages from the staged
+    /// section. Other key/section combinations intentionally do nothing.
+    func keyboardAction(for key: ChangeSelectionKey) -> ChangeSelectionAction? {
+        guard let primary else { return nil }
+        switch (key, primary.staged) {
+        case (.returnKey, false):
+            return .stage
+        case (.deleteKey, true):
+            return .unstage
+        default:
+            return nil
+        }
     }
 
     /// Replaces the selection with a single row: a plain click.

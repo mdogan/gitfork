@@ -109,14 +109,18 @@ private struct ChangeList: View {
                 Divider()
             }
 
-            List {
+            List(selection: primarySelection) {
                 if !store.changes.isEmpty {
                     Section {
                         if stagedEntries.isEmpty {
                             EmptyChangeRow(title: "No staged changes")
                         } else {
                             ForEach(stagedEntries) { entry in
-                                ChangeRow(entry: entry, requestDiscard: requestDiscard)
+                                ChangeRow(
+                                    entry: entry,
+                                    requestDiscard: requestDiscard
+                                )
+                                .tag(entry.id)
                             }
                         }
                     } header: {
@@ -135,7 +139,11 @@ private struct ChangeList: View {
                             EmptyChangeRow(title: "No unstaged changes")
                         } else {
                             ForEach(unstagedEntries) { entry in
-                                ChangeRow(entry: entry, requestDiscard: requestDiscard)
+                                ChangeRow(
+                                    entry: entry,
+                                    requestDiscard: requestDiscard
+                                )
+                                .tag(entry.id)
                             }
                         }
                     } header: {
@@ -152,6 +160,12 @@ private struct ChangeList: View {
             }
             .listStyle(.inset)
             .environment(\.defaultMinListRowHeight, 26)
+            .onKeyPress(.return) {
+                performKeyboardAction(for: .returnKey)
+            }
+            .onDeleteCommand {
+                _ = performKeyboardAction(for: .deleteKey)
+            }
             .overlay {
                 if store.changes.isEmpty {
                     ContentUnavailableView(
@@ -189,10 +203,34 @@ private struct ChangeList: View {
         store.changeEntries.unstagedSide
     }
 
+    private var primarySelection: Binding<ChangeEntryID?> {
+        Binding(
+            get: { store.changeSelection.primary },
+            set: store.selectChangeEntry
+        )
+    }
+
     private func requestDiscard(_ entries: [ChangeEntry]) {
         let targets = entries.unstagedSide
         guard !targets.isEmpty else { return }
         pendingDiscard = targets
+    }
+
+    private func performKeyboardAction(
+        for key: ChangeSelectionKey
+    ) -> KeyPress.Result {
+        guard let action = store.changeSelection.keyboardAction(for: key) else {
+            return .ignored
+        }
+        guard !store.isLoading else { return .handled }
+
+        switch action {
+        case .stage:
+            store.stage(store.selectedChangeEntries)
+        case .unstage:
+            store.unstage(store.selectedChangeEntries)
+        }
+        return .handled
     }
 }
 

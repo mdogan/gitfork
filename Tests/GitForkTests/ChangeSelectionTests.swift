@@ -93,6 +93,23 @@ struct ChangeSelectionTests {
     }
 
     @Test
+    func keyboardActionsMatchThePrimaryRowsSection() {
+        var selection = ChangeSelectionModel()
+
+        selection.select(order[2])
+        #expect(selection.keyboardAction(for: .returnKey) == .stage)
+        #expect(selection.keyboardAction(for: .deleteKey) == nil)
+
+        selection.select(order[1])
+        #expect(selection.keyboardAction(for: .returnKey) == nil)
+        #expect(selection.keyboardAction(for: .deleteKey) == .unstage)
+
+        selection.clear()
+        #expect(selection.keyboardAction(for: .returnKey) == nil)
+        #expect(selection.keyboardAction(for: .deleteKey) == nil)
+    }
+
+    @Test
     func refreshMovesSelectedFilesToTheSideTheyNowLiveOn() {
         var selection = ChangeSelectionModel()
         selection.select(order[3])

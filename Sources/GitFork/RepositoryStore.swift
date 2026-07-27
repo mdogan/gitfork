@@ -185,6 +185,17 @@ final class RepositoryStore: ObservableObject {
         showPrimaryChange()
     }
 
+    /// Updates the primary row through SwiftUI's native `List` selection.
+    func selectChangeEntry(_ id: ChangeEntryID?) {
+        guard let id else {
+            clearChangeSelection()
+            return
+        }
+        guard changeEntries.contains(where: { $0.id == id }) else { return }
+        changeSelection.select(id)
+        showPrimaryChange()
+    }
+
     /// Adds or removes one row without disturbing the rest: a Command-click.
     func toggleSelection(of entry: ChangeEntry) {
         changeSelection.toggle(entry.id, in: changeOrder)

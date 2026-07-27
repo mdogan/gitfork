@@ -571,6 +571,58 @@ struct GitClient: Sendable {
         return ["branch", "-D", "--", reference.name]
     }
 
+    func removeWorktree(at root: URL, worktree: GitWorktree) async throws {
+        _ = try await run(
+            Self.removeWorktreeArguments(for: worktree),
+            in: root
+        )
+    }
+
+    static func removeWorktreeArguments(for worktree: GitWorktree) throws -> [String] {
+        guard worktree.isDetached else {
+            throw GitOperationError(
+                command: "git worktree remove",
+                message: "Only detached worktrees can be deleted from GitFork."
+            )
+        }
+        guard !worktree.isCurrent else {
+            throw GitOperationError(
+                command: "git worktree remove",
+                message: "The current worktree cannot be deleted."
+            )
+        }
+        guard !worktree.isBare else {
+            throw GitOperationError(
+                command: "git worktree remove",
+                message: "Bare worktrees cannot be deleted from GitFork."
+            )
+        }
+        guard !worktree.isLocked else {
+            throw GitOperationError(
+                command: "git worktree remove",
+                message: "Unlock this worktree before deleting it."
+            )
+        }
+        guard !worktree.isPrunable else {
+            throw GitOperationError(
+                command: "git worktree remove",
+                message: "Prune this missing worktree instead of deleting it."
+            )
+        }
+        return ["worktree", "remove", "--", worktree.path]
+    }
+
+    func pruneStaleWorktrees(at root: URL) async throws {
+        _ = try await run(Self.pruneStaleWorktreeArguments, in: root)
+    }
+
+    static let pruneStaleWorktreeArguments = [
+        "worktree",
+        "prune",
+        "--expire",
+        "now"
+    ]
+
     func stash(
         at root: URL,
         message: String,

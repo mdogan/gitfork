@@ -108,32 +108,7 @@ struct SidebarView: View {
                     EmptySidebarRow(title: "No Worktrees")
                 } else {
                     ForEach(store.worktrees) { worktree in
-                        SidebarRow(
-                            title: worktree.displayName,
-                            icon: worktree.isCurrent
-                                ? "checkmark.circle.fill"
-                                : "rectangle.stack",
-                            isSelected: false
-                        ) {
-                            guard !worktree.isCurrent else { return }
-                            store.openRepository(
-                                URL(fileURLWithPath: worktree.path, isDirectory: true)
-                            )
-                        } badge: {
-                            Text(worktree.branchName ?? (worktree.isDetached ? "Detached" : ""))
-                                .lineLimit(1)
-                        }
-                        .help(worktree.path)
-                        .contextMenu {
-                            Button(worktree.isCurrent ? "Current Worktree" : "Open Worktree") {
-                                guard !worktree.isCurrent else { return }
-                                store.openRepository(
-                                    URL(fileURLWithPath: worktree.path, isDirectory: true)
-                                )
-                            }
-                            .disabled(worktree.isCurrent || worktree.isPrunable)
-                        }
-                        .disabled(worktree.isPrunable)
+                        WorktreeSidebarRow(worktree: worktree)
                     }
                 }
             } header: {
@@ -144,6 +119,125 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom) {
             RepositoryIdentityView()
         }
+    }
+}
+
+private struct WorktreeSidebarRow: View {
+    private enum Action {
+        case delete
+        case prune
+    }
+
+    @EnvironmentObject private var store: RepositoryStore
+    @State private var pendingAction: Action?
+    @State private var isConfirmingAction = false
+
+    let worktree: GitWorktree
+
+    var body: some View {
+        SidebarRow(
+            title: worktree.displayName,
+            icon: worktree.isCurrent
+                ? "checkmark.circle.fill"
+                : "rectangle.stack",
+            isSelected: false,
+            isEnabled: !worktree.isPrunable
+        ) {
+            open()
+        } badge: {
+            Text(worktree.branchName ?? (worktree.isDetached ? "Detached" : ""))
+                .lineLimit(1)
+        }
+        .help(worktree.path)
+        .contextMenu {
+            Button(worktree.isCurrent ? "Current Worktree" : "Open Worktree") {
+                open()
+            }
+            .disabled(worktree.isCurrent || worktree.isPrunable)
+
+            if worktree.isPrunable {
+                Divider()
+                Button(role: .destructive) {
+                    confirm(.prune)
+                } label: {
+                    Label("Prune Stale Worktrees", systemImage: "trash")
+                }
+                .disabled(store.isLoading)
+            } else if worktree.isDetached && !worktree.isCurrent {
+                Divider()
+                Button(role: .destructive) {
+                    confirm(.delete)
+                } label: {
+                    Label("Delete Worktree", systemImage: "trash")
+                }
+                .disabled(
+                    worktree.isBare
+                        || worktree.isLocked
+                        || store.isLoading
+                )
+            }
+        }
+        .confirmationDialog(
+            confirmationTitle,
+            isPresented: $isConfirmingAction,
+            titleVisibility: .visible
+        ) {
+            if pendingAction == .delete {
+                Button("Delete Worktree", role: .destructive) {
+                    store.delete(worktree)
+                }
+                .disabled(store.isLoading)
+            } else if pendingAction == .prune {
+                Button("Prune Stale Worktrees", role: .destructive) {
+                    store.pruneStaleWorktrees()
+                }
+                .disabled(store.isLoading)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(confirmationMessage)
+        }
+    }
+
+    private var confirmationTitle: String {
+        switch pendingAction {
+        case .delete:
+            "Delete Worktree “\(worktree.displayName)”?"
+        case .prune:
+            "Prune Stale Worktrees?"
+        case nil:
+            "Confirm Worktree Action"
+        }
+    }
+
+    private var confirmationMessage: String {
+        switch pendingAction {
+        case .delete:
+            """
+            This removes the worktree directory and its Git registration. Git will refuse \
+            if it contains uncommitted changes. Detached commits not referenced by a branch \
+            or tag may become unreachable.
+            """
+        case .prune:
+            """
+            This removes the Git registration for every stale worktree in this repository. \
+            It does not delete existing worktree directories, and Git preserves locked worktrees.
+            """
+        case nil:
+            ""
+        }
+    }
+
+    private func confirm(_ action: Action) {
+        pendingAction = action
+        isConfirmingAction = true
+    }
+
+    private func open() {
+        guard !worktree.isCurrent, !worktree.isPrunable else { return }
+        store.openRepository(
+            URL(fileURLWithPath: worktree.path, isDirectory: true)
+        )
     }
 }
 
@@ -478,6 +572,7 @@ private struct SidebarRow<Badge: View>: View {
     let title: String
     let icon: String
     let isSelected: Bool
+    let isEnabled: Bool
     let size: SidebarRowSize
     let indent: CGFloat
     let action: () -> Void
@@ -487,6 +582,7 @@ private struct SidebarRow<Badge: View>: View {
         title: String,
         icon: String,
         isSelected: Bool,
+        isEnabled: Bool = true,
         size: SidebarRowSize = .compact,
         indent: CGFloat = 0,
         action: @escaping () -> Void,
@@ -495,6 +591,7 @@ private struct SidebarRow<Badge: View>: View {
         self.title = title
         self.icon = icon
         self.isSelected = isSelected
+        self.isEnabled = isEnabled
         self.size = size
         self.indent = indent
         self.action = action
@@ -518,6 +615,7 @@ private struct SidebarRow<Badge: View>: View {
             .padding(.leading, indent)
             .contentShape(Rectangle())
         }
+        .disabled(!isEnabled)
         .buttonStyle(
             GitForkHoverButtonStyle(
                 size == .regular

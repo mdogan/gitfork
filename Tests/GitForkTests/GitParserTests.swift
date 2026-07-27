@@ -422,6 +422,111 @@ struct GitParserTests {
     }
 
     @Test
+    func removesCleanDetachedWorktreeWithoutForce() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkRemoveWorktreeTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("repository")
+        let linked = container.appendingPathComponent("detached worktree")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(["worktree", "add", "--detach", linked.path, "HEAD"], at: root)
+
+        let client = GitClient()
+        let worktree = try #require(
+            try await client.snapshot(at: root).worktrees.first {
+                URL(fileURLWithPath: $0.path).standardizedFileURL
+                    == linked.standardizedFileURL
+            }
+        )
+        #expect(worktree.isDetached)
+        #expect(
+            try GitClient.removeWorktreeArguments(for: worktree)
+                == ["worktree", "remove", "--", worktree.path]
+        )
+
+        try await client.removeWorktree(at: root, worktree: worktree)
+
+        #expect(!FileManager.default.fileExists(atPath: linked.path))
+        #expect(try await client.snapshot(at: root).worktrees.count == 1)
+    }
+
+    @Test
+    func refusesToForceRemoveDirtyDetachedWorktree() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkDirtyWorktreeTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("repository")
+        let linked = container.appendingPathComponent("detached-worktree")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(["worktree", "add", "--detach", linked.path, "HEAD"], at: root)
+        try "keep me\n".write(
+            to: linked.appendingPathComponent("untracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let client = GitClient()
+        let worktree = try #require(
+            try await client.snapshot(at: root).worktrees.first {
+                URL(fileURLWithPath: $0.path).standardizedFileURL
+                    == linked.standardizedFileURL
+            }
+        )
+
+        await #expect(throws: GitOperationError.self) {
+            try await client.removeWorktree(at: root, worktree: worktree)
+        }
+        #expect(FileManager.default.fileExists(atPath: linked.path))
+        #expect(
+            FileManager.default.fileExists(
+                atPath: linked.appendingPathComponent("untracked.txt").path
+            )
+        )
+    }
+
+    @Test
+    func prunesMissingWorktreeRegistrationImmediately() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkPruneWorktreeTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("repository")
+        let linked = container.appendingPathComponent("stale-worktree")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(["worktree", "add", "--detach", linked.path, "HEAD"], at: root)
+        try FileManager.default.removeItem(at: linked)
+
+        let client = GitClient()
+        let staleWorktree = try #require(
+            try await client.snapshot(at: root).worktrees.first(where: \.isPrunable)
+        )
+        #expect(staleWorktree.isPrunable)
+        #expect(staleWorktree.displayName == linked.lastPathComponent)
+        #expect(
+            GitClient.pruneStaleWorktreeArguments
+                == ["worktree", "prune", "--expire", "now"]
+        )
+
+        try await client.pruneStaleWorktrees(at: root)
+
+        #expect(try await client.snapshot(at: root).worktrees.count == 1)
+    }
+
+    @Test
     func repositoryStateTokenDetectsEditsAndNewBranches() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitForkMonitorTests-\(UUID().uuidString)")

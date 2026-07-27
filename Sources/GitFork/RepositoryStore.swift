@@ -479,6 +479,18 @@ final class RepositoryStore: ObservableObject {
         branchPendingForceDelete = nil
     }
 
+    func delete(_ worktree: GitWorktree) {
+        mutate("Deleting worktree \(worktree.displayName)") { root in
+            try await self.client.removeWorktree(at: root, worktree: worktree)
+        }
+    }
+
+    func pruneStaleWorktrees() {
+        mutate("Pruning stale worktrees") { root in
+            try await self.client.pruneStaleWorktrees(at: root)
+        }
+    }
+
     func stash(message: String, scope: StashScope = .all) {
         mutate("Stashing \(scope.title.lowercased())") { root in
             let resolved = message.trimmingCharacters(in: .whitespacesAndNewlines)

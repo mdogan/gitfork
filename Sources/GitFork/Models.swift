@@ -57,10 +57,6 @@ struct ReferenceTreeNode: Identifiable, Hashable, Sendable {
         "\(kind.rawValue):\(path)"
     }
 
-    var outlineChildren: [ReferenceTreeNode]? {
-        children.isEmpty ? nil : children
-    }
-
     static func build(from references: [GitReference]) -> [ReferenceTreeNode] {
         build(from: references, components: [], depth: 0)
     }

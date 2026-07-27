@@ -253,7 +253,7 @@ private struct SidebarSectionHeader: View {
             isExpanded.toggle()
         } label: {
             Text(title)
-                .font(.callout.weight(.semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -263,28 +263,94 @@ private struct SidebarSectionHeader: View {
     }
 }
 
+/// A tree node paired with the depth it is rendered at. The tree is flattened
+/// so every row — folder or reference — is an ordinary, fully clickable row.
+private struct ReferenceTreeRow: Identifiable {
+    let node: ReferenceTreeNode
+    let depth: Int
+
+    var id: String { node.id }
+}
+
 private struct ReferenceTreeRows: View {
+    private static let indentStep: CGFloat = 13
+
+    @State private var expandedPaths: Set<String> = []
+
     let references: [GitReference]
 
     var body: some View {
-        OutlineGroup(
-            ReferenceTreeNode.build(from: references),
-            children: \.outlineChildren
-        ) { node in
-            if let reference = node.reference {
+        ForEach(rows(for: ReferenceTreeNode.build(from: references), depth: 0)) { row in
+            if row.node.children.isEmpty, let reference = row.node.reference {
                 ReferenceSidebarRow(
                     reference: reference,
-                    title: node.name,
-                    icon: node.children.isEmpty ? reference.kind.icon : "folder"
+                    title: row.node.name,
+                    icon: reference.kind.icon,
+                    indent: indent(for: row.depth)
                 )
             } else {
-                Label(node.name, systemImage: "folder")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .help(node.path)
+                ReferenceFolderRow(
+                    node: row.node,
+                    indent: indent(for: row.depth),
+                    isExpanded: expandedPaths.contains(row.node.id)
+                ) {
+                    toggle(row.node)
+                }
             }
         }
+    }
+
+    private func rows(for nodes: [ReferenceTreeNode], depth: Int) -> [ReferenceTreeRow] {
+        nodes.flatMap { node -> [ReferenceTreeRow] in
+            let row = ReferenceTreeRow(node: node, depth: depth)
+            guard !node.children.isEmpty, expandedPaths.contains(node.id) else {
+                return [row]
+            }
+            return [row] + rows(for: node.children, depth: depth + 1)
+        }
+    }
+
+    private func indent(for depth: Int) -> CGFloat {
+        CGFloat(depth) * Self.indentStep
+    }
+
+    private func toggle(_ node: ReferenceTreeNode) {
+        if expandedPaths.contains(node.id) {
+            expandedPaths.remove(node.id)
+        } else {
+            expandedPaths.insert(node.id)
+        }
+    }
+}
+
+/// A grouping row such as `origin` or `feature`. The whole row is the
+/// disclosure control, so clicking the name toggles it like the chevron does.
+private struct ReferenceFolderRow: View {
+    let node: ReferenceTreeNode
+    let indent: CGFloat
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 7) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .animation(.easeOut(duration: 0.15), value: isExpanded)
+                    .frame(width: 16)
+                Text(node.name)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .padding(.leading, indent)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(GitForkHoverButtonStyle(.compactRow(isSelected: false)))
+        .help(isExpanded ? "Collapse \(node.path)" : "Expand \(node.path)")
+        .listRowBackground(Color.clear)
     }
 }
 
@@ -295,12 +361,14 @@ private struct ReferenceSidebarRow: View {
     let reference: GitReference
     let title: String
     let icon: String
+    var indent: CGFloat = 0
 
     var body: some View {
         SidebarRow(
             title: title,
             icon: icon,
-            isSelected: store.selectedReference == reference
+            isSelected: store.selectedReference == reference,
+            indent: indent
         ) {
             store.selectReference(reference)
         } badge: {
@@ -395,7 +463,7 @@ private struct EmptySidebarRow: View {
 
     var body: some View {
         Text(title)
-            .font(.caption)
+            .font(.callout)
             .foregroundStyle(.tertiary)
             .padding(.leading, 26)
     }
@@ -411,6 +479,7 @@ private struct SidebarRow<Badge: View>: View {
     let icon: String
     let isSelected: Bool
     let size: SidebarRowSize
+    let indent: CGFloat
     let action: () -> Void
     @ViewBuilder let badge: () -> Badge
 
@@ -419,6 +488,7 @@ private struct SidebarRow<Badge: View>: View {
         icon: String,
         isSelected: Bool,
         size: SidebarRowSize = .compact,
+        indent: CGFloat = 0,
         action: @escaping () -> Void,
         @ViewBuilder badge: @escaping () -> Badge
     ) {
@@ -426,6 +496,7 @@ private struct SidebarRow<Badge: View>: View {
         self.icon = icon
         self.isSelected = isSelected
         self.size = size
+        self.indent = indent
         self.action = action
         self.badge = badge
     }
@@ -434,16 +505,17 @@ private struct SidebarRow<Badge: View>: View {
         Button(action: action) {
             HStack(spacing: size == .regular ? 9 : 7) {
                 Image(systemName: icon)
-                    .frame(width: size == .regular ? 18 : 15)
+                    .frame(width: size == .regular ? 20 : 16)
                     .foregroundStyle(isSelected ? GitForkTheme.accent : .secondary)
                 Text(title)
                     .lineLimit(1)
                 Spacer()
                 badge()
-                    .font(.caption.monospacedDigit())
+                    .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            .font(size == .regular ? .body : .callout)
+            .font(size == .regular ? .title3 : .body)
+            .padding(.leading, indent)
             .contentShape(Rectangle())
         }
         .buttonStyle(
@@ -476,10 +548,10 @@ private struct RepositoryIdentityView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(store.repositoryName)
-                        .font(.callout.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .lineLimit(1)
                     Text(store.repositoryURL?.deletingLastPathComponent().path ?? "")
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

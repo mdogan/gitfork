@@ -187,7 +187,7 @@ struct GitParserTests {
 
         let fix = try #require(tree.first { $0.name == "fix" })
         #expect(fix.reference?.name == "fix")
-        #expect(fix.outlineChildren == nil)
+        #expect(fix.children.isEmpty)
     }
 
     @Test

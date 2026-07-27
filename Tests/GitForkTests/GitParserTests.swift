@@ -62,6 +62,87 @@ struct GitParserTests {
     }
 
     @Test
+    func pairsReplacedLinesIntoSideBySideRows() throws {
+        let diff = """
+        diff --git a/file.swift b/file.swift
+        index 1111111..2222222 100644
+        --- a/file.swift
+        +++ b/file.swift
+        @@ -10,4 +10,5 @@
+         context before
+        -old value
+        -dropped value
+        +new value
+        +extra value
+        +another value
+         context after
+        """
+        let sideBySide = SideBySideDiff(UnifiedDiff(diff))
+        let hunk = try #require(sideBySide.hunks.first)
+
+        #expect(hunk.header.text == "@@ -10,4 +10,5 @@")
+        #expect(hunk.rows.map { $0.old?.displayText } == [
+            "context before",
+            "old value",
+            "dropped value",
+            nil,
+            "context after"
+        ])
+        #expect(hunk.rows.map { $0.new?.displayText } == [
+            "context before",
+            "new value",
+            "extra value",
+            "another value",
+            "context after"
+        ])
+        #expect(hunk.rows.map { $0.old?.oldLineNumber } == [10, 11, 12, nil, 13])
+        #expect(hunk.rows.map { $0.new?.newLineNumber } == [10, 11, 12, 13, 14])
+        #expect(hunk.selectableLineIDs.count == 5)
+        // Column width covers context lines too, not just the changed ones.
+        #expect(sideBySide.oldColumnCharacters == "context before".count)
+        #expect(sideBySide.newColumnCharacters == "context before".count)
+    }
+
+    @Test
+    func startsANewSideBySideBlockWhenDeletionsFollowAdditions() throws {
+        let diff = """
+        diff --git a/file.swift b/file.swift
+        --- a/file.swift
+        +++ b/file.swift
+        @@ -1,4 +1,4 @@
+        -first old
+        +first new
+        -second old
+        +second new
+        """
+        let sideBySide = SideBySideDiff(UnifiedDiff(diff))
+        let hunk = try #require(sideBySide.hunks.first)
+
+        #expect(hunk.rows.count == 2)
+        #expect(hunk.rows.map { $0.old?.displayText } == ["first old", "second old"])
+        #expect(hunk.rows.map { $0.new?.displayText } == ["first new", "second new"])
+    }
+
+    @Test
+    func keepsMissingNewlineMarkerOnTheVersionThatOwnsIt() throws {
+        let diff = """
+        diff --git a/file.swift b/file.swift
+        --- a/file.swift
+        +++ b/file.swift
+        @@ -1 +1 @@
+        -old value
+        +new value
+        \\ No newline at end of file
+        """
+        let sideBySide = SideBySideDiff(UnifiedDiff(diff))
+        let hunk = try #require(sideBySide.hunks.first)
+
+        #expect(hunk.rows.count == 2)
+        #expect(hunk.rows[1].old == nil)
+        #expect(hunk.rows[1].new?.kind == .noNewline)
+    }
+
+    @Test
     func separatesCommitDiffIntoFiles() {
         let diff = """
         commit abcdef123456

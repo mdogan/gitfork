@@ -24,6 +24,16 @@ struct UnifiedDiffLine: Identifiable, Equatable {
     let kind: UnifiedDiffLineKind
     let oldLineNumber: Int?
     let newLineNumber: Int?
+
+    /// The line's content without the unified-diff marker column.
+    var displayText: String {
+        switch kind {
+        case .context, .addition, .deletion:
+            String(text.dropFirst())
+        default:
+            text
+        }
+    }
 }
 
 struct UnifiedDiffHunk: Identifiable, Equatable {

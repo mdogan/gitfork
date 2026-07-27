@@ -1,8 +1,39 @@
 import AppKit
 import SwiftUI
 
+/// How a working-tree diff is laid out: as one column of interleaved changes or
+/// as the two versions of the file next to each other.
+enum DiffPresentation: String, CaseIterable, Identifiable {
+    case unified
+    case sideBySide
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .unified: "Unified"
+        case .sideBySide: "Side by Side"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .unified: "rectangle"
+        case .sideBySide: "rectangle.split.2x1"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .unified: "Show one column of interleaved changes"
+        case .sideBySide: "Compare the two versions of the file side by side"
+        }
+    }
+}
+
 struct DetailView: View {
     @EnvironmentObject private var store: RepositoryStore
+    @AppStorage("changeDiffPresentation") private var presentation = DiffPresentation.unified
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,12 +42,17 @@ struct DetailView: View {
                 Divider()
                 DiffTextView(text: store.diff)
             } else if let change = store.selectedChange, store.selectedSection == .changes {
-                ChangeHeader(change: change, staged: store.selectedChangeIsStaged)
+                ChangeHeader(
+                    change: change,
+                    staged: store.selectedChangeIsStaged,
+                    presentation: $presentation
+                )
                 Divider()
                 DiffTextView(
                     text: store.diff,
                     change: change,
-                    staged: store.selectedChangeIsStaged
+                    staged: store.selectedChangeIsStaged,
+                    presentation: presentation
                 )
             } else {
                 ContentUnavailableView(
@@ -94,6 +130,7 @@ private struct ChangeHeader: View {
     @EnvironmentObject private var store: RepositoryStore
     let change: WorkingChange
     let staged: Bool
+    @Binding var presentation: DiffPresentation
     @State private var isConfirmingFileDiscard = false
 
     var body: some View {
@@ -115,6 +152,19 @@ private struct ChangeHeader: View {
             }
 
             Spacer()
+
+            Picker("Diff Layout", selection: $presentation) {
+                ForEach(DiffPresentation.allCases) { layout in
+                    Image(systemName: layout.systemImage)
+                        .help(layout.help)
+                        .tag(layout)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .fixedSize()
+            .help("Switch between a unified diff and a side-by-side comparison")
 
             Button {
                 staged ? store.unstage(change) : store.stage(change)
@@ -180,6 +230,7 @@ private struct DiffTextView: View {
     let text: String
     var change: WorkingChange?
     var staged = false
+    var presentation = DiffPresentation.unified
 
     @State private var selectedDisplayLineIDs: Set<Int> = []
     @State private var selectedHunkID: Int?
@@ -187,6 +238,10 @@ private struct DiffTextView: View {
 
     private var document: UnifiedDiff {
         UnifiedDiff(text)
+    }
+
+    private var sideBySideDocument: SideBySideDiff {
+        SideBySideDiff(document)
     }
 
     var body: some View {
@@ -203,7 +258,17 @@ private struct DiffTextView: View {
                 GeometryReader { viewport in
                     ScrollView([.horizontal, .vertical]) {
                         Group {
-                            if change != nil, !document.displayHunks.isEmpty {
+                            if change != nil, presentation == .sideBySide, !sideBySideDocument.isEmpty {
+                                SideBySideDiffView(
+                                    diff: sideBySideDocument,
+                                    availableWidth: viewport.size.width,
+                                    staged: staged,
+                                    isLoading: store.isLoading,
+                                    apply: apply,
+                                    discard: requestDiscard
+                                )
+                                .padding(.vertical, 8)
+                            } else if change != nil, !document.displayHunks.isEmpty {
                                 LazyVStack(alignment: .leading, spacing: 0) {
                                     ForEach(document.displayHunks) { hunk in
                                         DiffHunkView(
@@ -266,6 +331,9 @@ private struct DiffTextView: View {
             }
         }
         .onChange(of: text) {
+            clearSelection()
+        }
+        .onChange(of: presentation) {
             clearSelection()
         }
         .alert(
@@ -393,6 +461,74 @@ private enum DiffLayout {
     static let rowHeight: CGFloat = 20
     static let lineNumberWidth: CGFloat = 34
     static let accentBarWidth: CGFloat = 2.5
+    static let textPadding: CGFloat = 9
+    static let dividerWidth: CGFloat = 1
+
+    /// Everything a side-by-side cell draws around its text.
+    static let cellChrome = accentBarWidth + lineNumberWidth + dividerWidth + textPadding * 2
+
+    /// Width of one monospaced character in the diff font, used to size the
+    /// side-by-side columns so long lines scroll instead of wrapping.
+    static let characterWidth = NSFont
+        .monospacedSystemFont(ofSize: 12, weight: .regular)
+        .maximumAdvancement
+        .width
+}
+
+/// Stage, unstage, and discard actions for a set of diff lines. Shared by the
+/// unified hunk view and the side-by-side hunk view.
+private struct DiffHunkActions: View {
+    let staged: Bool
+    let isLoading: Bool
+    let subject: String
+    let lineIDs: Set<Int>
+    let apply: (Set<Int>) -> Void
+    let discard: (Set<Int>) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(staged ? "Unstage" : "Stage") {
+                apply(lineIDs)
+            }
+            .help(staged ? "Unstage \(subject)" : "Stage \(subject)")
+
+            if !staged {
+                Button("Discard Changes…", role: .destructive) {
+                    discard(lineIDs)
+                }
+                .help("Permanently discard \(subject) after confirmation")
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(isLoading)
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+private struct DiffHunkMenu: View {
+    let staged: Bool
+    let isLoading: Bool
+    let lineIDs: Set<Int>
+    let apply: (Set<Int>) -> Void
+    let discard: (Set<Int>) -> Void
+
+    var body: some View {
+        if !lineIDs.isEmpty {
+            Button(staged ? "Unstage" : "Stage") {
+                apply(lineIDs)
+            }
+            .disabled(isLoading)
+            if !staged {
+                Divider()
+                Button("Discard Changes…", role: .destructive) {
+                    discard(lineIDs)
+                }
+                .disabled(isLoading)
+            }
+        }
+    }
 }
 
 private struct DiffHunkView: View {
@@ -494,19 +630,13 @@ private struct DiffHunkView: View {
                     .allowsHitTesting(false)
             }
             .contextMenu {
-                if !targetLineIDs.isEmpty {
-                    Button(staged ? "Unstage" : "Stage") {
-                        apply(targetLineIDs)
-                    }
-                    .disabled(isLoading)
-                    if !staged {
-                        Divider()
-                        Button("Discard Changes…", role: .destructive) {
-                            discard(targetLineIDs)
-                        }
-                        .disabled(isLoading)
-                    }
-                }
+                DiffHunkMenu(
+                    staged: staged,
+                    isLoading: isLoading,
+                    lineIDs: targetLineIDs,
+                    apply: apply,
+                    discard: discard
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -515,28 +645,14 @@ private struct DiffHunkView: View {
     }
 
     private var actionButtons: some View {
-        HStack(spacing: 4) {
-            Button(staged ? "Unstage" : "Stage") {
-                apply(targetLineIDs)
-            }
-            .help(
-                staged
-                    ? "Unstage this selected hunk"
-                    : "Stage this selected hunk"
-            )
-
-            if !staged {
-                Button("Discard Changes…", role: .destructive) {
-                    discard(targetLineIDs)
-                }
-                .help("Permanently discard this selected hunk after confirmation")
-            }
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .disabled(isLoading)
-        .padding(6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        DiffHunkActions(
+            staged: staged,
+            isLoading: isLoading,
+            subject: selectedRowRange == nil ? "this hunk" : "the selected lines",
+            lineIDs: targetLineIDs,
+            apply: apply,
+            discard: discard
+        )
     }
 
     private var selectionGesture: some Gesture {
@@ -562,6 +678,261 @@ private struct DiffHunkView: View {
     private func rowIndex(at yPosition: CGFloat) -> Int {
         let rawIndex = Int(floor(yPosition / DiffLayout.rowHeight))
         return min(max(rawIndex, 0), hunk.lines.count - 1)
+    }
+}
+
+/// The two versions of a file laid out in aligned columns. Read-only apart from
+/// whole-hunk staging, which keeps the drag-to-select gestures of the unified
+/// view from competing with text selection here.
+private struct SideBySideDiffView: View {
+    let diff: SideBySideDiff
+    let availableWidth: CGFloat
+    let staged: Bool
+    let isLoading: Bool
+    let apply: (Set<Int>) -> Void
+    let discard: (Set<Int>) -> Void
+
+    private var oldColumnWidth: CGFloat {
+        columnWidth(for: diff.oldColumnCharacters)
+    }
+
+    private var newColumnWidth: CGFloat {
+        columnWidth(for: diff.newColumnCharacters)
+    }
+
+    /// Columns split the viewport evenly, and grow past it only when a line is
+    /// too long to fit, so short diffs fill the pane instead of hugging content.
+    private func columnWidth(for characters: Int) -> CGFloat {
+        let half = max((availableWidth - DiffLayout.dividerWidth) / 2, 0)
+        let content = DiffLayout.cellChrome
+            + CGFloat(characters) * DiffLayout.characterWidth
+        return max(half, content).rounded(.up)
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+            Section {
+                ForEach(diff.hunks) { hunk in
+                    SideBySideHunkView(
+                        hunk: hunk,
+                        oldColumnWidth: oldColumnWidth,
+                        newColumnWidth: newColumnWidth,
+                        staged: staged,
+                        isLoading: isLoading,
+                        apply: apply,
+                        discard: discard
+                    )
+                }
+            } header: {
+                SideBySideColumnHeader(
+                    staged: staged,
+                    oldColumnWidth: oldColumnWidth,
+                    newColumnWidth: newColumnWidth
+                )
+            }
+        }
+    }
+}
+
+private struct SideBySideColumnHeader: View {
+    let staged: Bool
+    let oldColumnWidth: CGFloat
+    let newColumnWidth: CGFloat
+
+    private var oldTitle: String {
+        staged ? "Last Commit" : "Staged"
+    }
+
+    private var newTitle: String {
+        staged ? "Staged" : "Working Tree"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                caption(oldTitle, width: oldColumnWidth)
+                Divider()
+                caption(newTitle, width: newColumnWidth)
+            }
+            Divider()
+        }
+        .background(.bar)
+    }
+
+    private func caption(_ title: String, width: CGFloat) -> some View {
+        Text(title)
+            .font(.caption2.weight(.semibold))
+            .textCase(.uppercase)
+            .foregroundStyle(.secondary)
+            .padding(
+                .leading,
+                DiffLayout.accentBarWidth + DiffLayout.lineNumberWidth
+                    + DiffLayout.dividerWidth + DiffLayout.textPadding
+            )
+            .frame(width: width, height: 24, alignment: .leading)
+    }
+}
+
+private struct SideBySideHunkView: View {
+    let hunk: SideBySideDiffHunk
+    let oldColumnWidth: CGFloat
+    let newColumnWidth: CGFloat
+    let staged: Bool
+    let isLoading: Bool
+    let apply: (Set<Int>) -> Void
+    let discard: (Set<Int>) -> Void
+
+    @State private var isHovering = false
+
+    private var totalWidth: CGFloat {
+        oldColumnWidth + DiffLayout.dividerWidth + newColumnWidth
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: DiffLayout.accentBarWidth + DiffLayout.lineNumberWidth)
+                Divider()
+                Text(hunk.header.text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, DiffLayout.textPadding)
+                    .frame(height: DiffLayout.rowHeight, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .frame(width: totalWidth, alignment: .leading)
+            .background(Color.primary.opacity(0.035))
+
+            ZStack(alignment: .topTrailing) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(hunk.rows) { row in
+                        SideBySideRowView(
+                            row: row,
+                            oldColumnWidth: oldColumnWidth,
+                            newColumnWidth: newColumnWidth
+                        )
+                    }
+                }
+
+                if isHovering, !hunk.selectableLineIDs.isEmpty {
+                    DiffHunkActions(
+                        staged: staged,
+                        isLoading: isLoading,
+                        subject: "this hunk",
+                        lineIDs: hunk.selectableLineIDs,
+                        apply: apply,
+                        discard: discard
+                    )
+                    .padding(7)
+                }
+            }
+            .overlay {
+                Rectangle()
+                    .strokeBorder(isHovering ? GitForkTheme.blue : .clear, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+            .contextMenu {
+                DiffHunkMenu(
+                    staged: staged,
+                    isLoading: isLoading,
+                    lineIDs: hunk.selectableLineIDs,
+                    apply: apply,
+                    discard: discard
+                )
+            }
+        }
+        .frame(width: totalWidth, alignment: .leading)
+        .padding(.bottom, 10)
+        .onHover { isHovering = $0 }
+    }
+}
+
+private struct SideBySideRowView: View {
+    let row: SideBySideDiffRow
+    let oldColumnWidth: CGFloat
+    let newColumnWidth: CGFloat
+
+    var body: some View {
+        HStack(spacing: 0) {
+            SideBySideCell(line: row.old, side: .old, width: oldColumnWidth)
+            Divider()
+            SideBySideCell(line: row.new, side: .new, width: newColumnWidth)
+        }
+        .frame(height: DiffLayout.rowHeight)
+    }
+}
+
+private struct SideBySideCell: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let line: UnifiedDiffLine?
+    let side: SideBySideDiffSide
+    let width: CGFloat
+
+    private var lineNumber: String {
+        guard let line else { return "" }
+        let number = side == .old ? line.oldLineNumber : line.newLineNumber
+        return number.map(String.init) ?? ""
+    }
+
+    private var foreground: Color {
+        guard let line else { return .clear }
+        switch line.kind {
+        case .addition: return GitForkTheme.diffAddition(colorScheme)
+        case .deletion: return GitForkTheme.diffDeletion(colorScheme)
+        case .noNewline: return .secondary
+        default: return .primary
+        }
+    }
+
+    private var background: Color {
+        // A missing counterpart is filled so the eye can follow the gap.
+        guard let line else { return Color.primary.opacity(0.04) }
+        switch line.kind {
+        case .addition: return GitForkTheme.green.opacity(0.11)
+        case .deletion: return GitForkTheme.red.opacity(0.10)
+        default: return .clear
+        }
+    }
+
+    private var accentBar: Color {
+        switch line?.kind {
+        case .addition: return GitForkTheme.green.opacity(0.85)
+        case .deletion: return GitForkTheme.red.opacity(0.85)
+        default: return .clear
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(accentBar)
+                .frame(width: DiffLayout.accentBarWidth)
+
+            Text(lineNumber)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .padding(.trailing, 5)
+                .frame(
+                    width: DiffLayout.lineNumberWidth,
+                    height: DiffLayout.rowHeight,
+                    alignment: .trailing
+                )
+
+            Divider()
+
+            Text(line?.displayText ?? "")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(foreground)
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .padding(.horizontal, DiffLayout.textPadding)
+                .frame(height: DiffLayout.rowHeight, alignment: .leading)
+
+            Spacer(minLength: 0)
+        }
+        .frame(width: width, height: DiffLayout.rowHeight, alignment: .leading)
+        .background(background)
     }
 }
 
@@ -594,12 +965,7 @@ private struct DiffLineView: View {
     }
 
     private var displayText: String {
-        switch line.kind {
-        case .context, .addition, .deletion:
-            return String(line.text.dropFirst())
-        default:
-            return line.text
-        }
+        line.displayText
     }
 
     var body: some View {
@@ -623,7 +989,7 @@ private struct DiffLineView: View {
             }
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(foreground)
-                .padding(.horizontal, 9)
+                .padding(.horizontal, DiffLayout.textPadding)
                 .frame(height: DiffLayout.rowHeight, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

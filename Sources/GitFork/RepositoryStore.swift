@@ -122,14 +122,6 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
-    func openExternalURL(_ url: URL) {
-        guard let path = GitForkExternalURL.repositoryPath(from: url) else {
-            errorMessage = "GitFork received an invalid repository URL."
-            return
-        }
-        openRepository(URL(fileURLWithPath: path, isDirectory: true))
-    }
-
     func refresh() {
         guard let root = repositoryURL else { return }
         _ = startOperation("Refreshing") {

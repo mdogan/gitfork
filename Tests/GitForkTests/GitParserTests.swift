@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import GitFork
@@ -1257,6 +1258,109 @@ struct GitParserTests {
         }
         #expect(!store.isLoading)
         #expect(store.repositoryURL?.standardizedFileURL == root.standardizedFileURL)
+    }
+
+    @Test
+    @MainActor
+    func separateStoresLoadRepositoriesIndependently() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkWindowStoreTests-\(UUID().uuidString)")
+        let firstRoot = container.appendingPathComponent("First")
+        let secondRoot = container.appendingPathComponent("Second")
+        try FileManager.default.createDirectory(
+            at: firstRoot,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: secondRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        for (root, branch) in [(firstRoot, "first"), (secondRoot, "second")] {
+            try runGit(["init", "-b", branch], at: root)
+            try runGit(["config", "user.name", "GitFork Tests"], at: root)
+            try runGit(["config", "user.email", "tests@example.com"], at: root)
+            try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        }
+
+        let firstStore = RepositoryStore()
+        let secondStore = RepositoryStore()
+        firstStore.openRepository(firstRoot)
+        secondStore.openRepository(secondRoot)
+
+        for _ in 0..<500 {
+            guard firstStore.isLoading || secondStore.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(!firstStore.isLoading)
+        #expect(!secondStore.isLoading)
+        #expect(
+            firstStore.repositoryURL?.standardizedFileURL
+                == firstRoot.standardizedFileURL
+        )
+        #expect(
+            secondStore.repositoryURL?.standardizedFileURL
+                == secondRoot.standardizedFileURL
+        )
+        #expect(firstStore.branch == "first")
+        #expect(secondStore.branch == "second")
+    }
+
+    @Test
+    @MainActor
+    func routesRepositoryWindowsIntoTheSourceTabGroup() async {
+        _ = NSApplication.shared
+        let sourceWindow = NSWindow()
+        let repositoryWindow = NSWindow()
+        let coordinator = RepositoryTabCoordinator()
+        let sourceTabID = UUID()
+
+        coordinator.register(
+            tabID: sourceTabID,
+            repositoryPath: "/tmp/First",
+            window: sourceWindow
+        )
+        coordinator.prepareNewTab(
+            repositoryPath: "/tmp/Second",
+            sourceTabID: sourceTabID
+        )
+        let requestedPath = coordinator.register(
+            tabID: UUID(),
+            repositoryPath: "",
+            window: repositoryWindow
+        )
+        try? await Task.sleep(for: .milliseconds(300))
+
+        #expect(requestedPath == "/tmp/Second")
+        #expect(
+            sourceWindow.tabbedWindows?.contains {
+                $0 === repositoryWindow
+            } == true
+        )
+        #expect(coordinator.focusTab(presenting: "/tmp/Second"))
+        #expect(!coordinator.focusTab(presenting: "/tmp/Missing"))
+
+        sourceWindow.close()
+        repositoryWindow.close()
+    }
+
+    @Test
+    @MainActor
+    func appDelegateQueuesExternalRepositoryRequestsUntilConsumed() throws {
+        let appDelegate = GitForkAppDelegate()
+        let url = try #require(
+            URL(string: "gitfork://open?path=%2Ftmp%2FFirst")
+        )
+
+        appDelegate.application(NSApplication.shared, open: [url])
+
+        let request = try #require(appDelegate.openRequests.first)
+        #expect(request.url == url)
+
+        appDelegate.consume(request)
+        #expect(appDelegate.openRequests.isEmpty)
     }
 
     @Test

@@ -4,6 +4,7 @@ struct ChangesView: View {
     @EnvironmentObject private var store: RepositoryStore
     @Binding var showingStashSheet: Bool
     @Binding var stashScope: StashScope
+    @State private var showingCommitSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,6 +51,20 @@ struct ChangesView: View {
                 .controlSize(.small)
                 .help("Choose which changes to save to a stash")
                 .disabled(store.changes.isEmpty || store.isLoading)
+
+                Button {
+                    showingCommitSheet = true
+                } label: {
+                    Label(
+                        "Commit",
+                        systemImage: store.signCommit ? "checkmark.seal.fill" : "checkmark.circle"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut(.return, modifiers: .command)
+                .help("Write a commit message for the staged changes")
+                .disabled(store.isLoading)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -58,11 +73,9 @@ struct ChangesView: View {
 
             ChangeList()
                 .frame(maxHeight: .infinity)
-
-            Divider()
-
-            CommitComposer()
-                .frame(minHeight: 190, idealHeight: 220, maxHeight: 270)
+        }
+        .sheet(isPresented: $showingCommitSheet) {
+            CommitSheet(isPresented: $showingCommitSheet)
         }
     }
 
@@ -288,35 +301,49 @@ private struct ChangeRow: View {
     }
 }
 
-private struct CommitComposer: View {
+private struct CommitSheet: View {
     @EnvironmentObject private var store: RepositoryStore
+    @Binding var isPresented: Bool
     @State private var isConfirmingAmend = false
+    @FocusState private var isMessageFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Commit", systemImage: "checkmark.circle")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                Image(systemName: store.signCommit ? "checkmark.seal" : "checkmark.circle")
+                    .font(.title)
+                    .foregroundStyle(store.signCommit ? GitForkTheme.green : GitForkTheme.accent)
+                VStack(alignment: .leading) {
+                    Text("Commit Changes")
+                        .font(.title2.weight(.semibold))
+                    Text(stagedSummary)
+                        .foregroundStyle(.secondary)
+                }
+
                 Spacer()
 
-                Toggle(isOn: $store.signCommit) {
-                    Label("Sign", systemImage: "checkmark.seal")
-                }
-                .toggleStyle(.checkbox)
-                .font(.caption)
-                .foregroundStyle(store.signCommit ? GitForkTheme.green : .primary)
-                .help("Sign commits with the configured OpenPGP key")
-
-                Toggle("Amend", isOn: $store.amend)
+                VStack(alignment: .leading, spacing: 5) {
+                    Toggle(isOn: $store.signCommit) {
+                        Label("Sign", systemImage: "checkmark.seal")
+                    }
                     .toggleStyle(.checkbox)
                     .font(.caption)
-                    .help("Replace the latest commit")
-                    .disabled(store.isLoading)
+                    .foregroundStyle(store.signCommit ? GitForkTheme.green : .primary)
+                    .help("Sign commits with the configured OpenPGP key")
+
+                    Toggle("Amend", isOn: $store.amend)
+                        .toggleStyle(.checkbox)
+                        .font(.caption)
+                        .help("Replace the latest commit")
+                        .disabled(store.isLoading)
+                }
             }
 
             TextEditor(text: $store.commitMessage)
                 .font(.body)
                 .scrollContentBackground(.hidden)
+                .focused($isMessageFocused)
+                .frame(minHeight: 170)
                 .padding(7)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
                 .overlay(
@@ -334,15 +361,18 @@ private struct CommitComposer: View {
                 }
 
             HStack {
-                Text("\(store.stagedChanges.count) staged file\(store.stagedChanges.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Spacer()
+                Button("Cancel", role: .cancel) {
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+                .help("Close without committing; the message is kept")
+
                 Button {
                     if store.amend {
                         isConfirmingAmend = true
                     } else {
-                        store.createCommit()
+                        commit()
                     }
                 } label: {
                     Label(
@@ -351,6 +381,7 @@ private struct CommitComposer: View {
                     )
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: .command)
                 .help(commitButtonHelp)
                 .disabled(
                     (!store.amend && store.stagedChanges.isEmpty)
@@ -359,12 +390,13 @@ private struct CommitComposer: View {
                 )
             }
         }
-        .padding(12)
-        .background(.bar)
+        .padding(24)
+        .frame(width: 540)
+        .onAppear { isMessageFocused = true }
         .alert("Amend the Latest Commit?", isPresented: $isConfirmingAmend) {
             Button("Cancel", role: .cancel) {}
             Button("Amend Commit", role: .destructive) {
-                store.createCommit()
+                commit()
             }
         } message: {
             Text(
@@ -374,11 +406,21 @@ private struct CommitComposer: View {
         }
     }
 
+    private func commit() {
+        store.createCommit()
+        isPresented = false
+    }
+
+    private var stagedSummary: String {
+        let count = store.stagedChanges.count
+        return "\(count) staged file\(count == 1 ? "" : "s") on \(store.branch)"
+    }
+
     private var commitButtonTitle: String {
         if store.amend {
             return store.signCommit ? "Amend & Sign" : "Amend Commit"
         }
-        return store.signCommit ? "Sign & Commit \(store.branch)" : "Commit \(store.branch)"
+        return store.signCommit ? "Sign & Commit" : "Commit"
     }
 
     private var commitButtonHelp: String {

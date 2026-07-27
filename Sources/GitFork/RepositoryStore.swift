@@ -20,8 +20,9 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var operationLabel: String?
     @Published var selectedSection: WorkspaceSection = .history
     @Published var selectedCommit: GitCommit?
-    @Published var selectedChange: WorkingChange?
-    @Published var selectedChangeIsStaged = false
+    @Published private(set) var selectedChange: WorkingChange?
+    @Published private(set) var selectedChangeIsStaged = false
+    @Published private(set) var changeSelection = ChangeSelectionModel()
     @Published var selectedReference: GitReference?
     @Published var selectedStash: GitStash?
     @Published var searchText = ""
@@ -65,6 +66,21 @@ final class RepositoryStore: ObservableObject {
 
     var unstagedChanges: [WorkingChange] {
         changes.filter(\.isUnstaged)
+    }
+
+    /// Every change-list row in the order the list draws them: staged first,
+    /// then working tree. Shift-click ranges follow this order.
+    var changeEntries: [ChangeEntry] {
+        stagedChanges.map { ChangeEntry($0, staged: true) }
+            + unstagedChanges.map { ChangeEntry($0, staged: false) }
+    }
+
+    var selectedChangeEntries: [ChangeEntry] {
+        changeEntries.filter { changeSelection.contains($0.id) }
+    }
+
+    private var changeOrder: [ChangeEntryID] {
+        changeEntries.map(\.id)
     }
 
     var filteredCommits: [GitCommit] {
@@ -163,7 +179,55 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    /// Selects a single row, replacing any multi-selection: a plain click.
     func selectChange(_ change: WorkingChange?, staged: Bool) {
+        changeSelection.select(change.map { ChangeEntryID(path: $0.path, staged: staged) })
+        showPrimaryChange()
+    }
+
+    /// Adds or removes one row without disturbing the rest: a Command-click.
+    func toggleSelection(of entry: ChangeEntry) {
+        changeSelection.toggle(entry.id, in: changeOrder)
+        showPrimaryChange()
+    }
+
+    /// Selects every row between the anchor and `entry`: a Shift-click.
+    func extendSelection(to entry: ChangeEntry) {
+        changeSelection.extend(to: entry.id, in: changeOrder)
+        showPrimaryChange()
+    }
+
+    func clearChangeSelection() {
+        changeSelection.clear()
+        showPrimaryChange()
+    }
+
+    func isSelected(_ entry: ChangeEntry) -> Bool {
+        changeSelection.contains(entry.id)
+    }
+
+    /// Loads the diff for the row that drives the detail pane. Clicks skip the
+    /// reload while the same row stays primary; a refresh always reloads,
+    /// because the file may have changed underneath an unchanged row.
+    private func showPrimaryChange(alwaysReloadDiff: Bool = false) {
+        let entry = changeSelection.primary.flatMap { id in
+            changeEntries.first { $0.id == id }
+        }
+        guard let entry else {
+            if selectedChange != nil {
+                showChange(nil, staged: false)
+            }
+            return
+        }
+        guard alwaysReloadDiff
+                || entry.change != selectedChange
+                || entry.staged != selectedChangeIsStaged else {
+            return
+        }
+        showChange(entry.change, staged: entry.staged)
+    }
+
+    private func showChange(_ change: WorkingChange?, staged: Bool) {
         selectedStash = nil
         selectedChange = change
         selectedChangeIsStaged = staged
@@ -213,14 +277,30 @@ final class RepositoryStore: ObservableObject {
     }
 
     func stage(_ change: WorkingChange) {
-        mutate("Staging \(change.path)") { root in
-            try await self.client.stage(at: root, paths: [change.path])
-        }
+        stage([ChangeEntry(change, staged: false)])
     }
 
     func unstage(_ change: WorkingChange) {
-        mutate("Unstaging \(change.path)") { root in
-            try await self.client.unstage(at: root, paths: [change.path])
+        unstage([ChangeEntry(change, staged: true)])
+    }
+
+    /// Stages every row of `entries` that sits on the working-tree side; rows
+    /// already in the index are ignored, so a selection spanning both sections
+    /// still does the expected thing.
+    func stage(_ entries: [ChangeEntry]) {
+        let paths = entries.unstagedSide.paths
+        guard !paths.isEmpty else { return }
+        mutate(Self.operationLabel("Staging", paths: paths)) { root in
+            try await self.client.stage(at: root, paths: paths)
+        }
+    }
+
+    /// Unstages every row of `entries` that sits on the staged side.
+    func unstage(_ entries: [ChangeEntry]) {
+        let paths = entries.stagedSide.paths
+        guard !paths.isEmpty else { return }
+        mutate(Self.operationLabel("Unstaging", paths: paths)) { root in
+            try await self.client.unstage(at: root, paths: paths)
         }
     }
 
@@ -243,8 +323,17 @@ final class RepositoryStore: ObservableObject {
     }
 
     func discard(_ change: WorkingChange) {
-        mutate("Discarding changes in \(change.path)") { root in
-            try await self.client.discard(at: root, change: change)
+        discard([ChangeEntry(change, staged: false)])
+    }
+
+    /// Discards the working-tree changes of every row of `entries` on the
+    /// unstaged side. Staged rows are left alone: the index is never rewritten
+    /// by a discard.
+    func discard(_ entries: [ChangeEntry]) {
+        let targets = entries.unstagedSide.map(\.change)
+        guard !targets.isEmpty else { return }
+        mutate(Self.operationLabel("Discarding changes in", paths: targets.map(\.path))) { root in
+            try await self.client.discard(at: root, changes: targets)
         }
     }
 
@@ -258,6 +347,10 @@ final class RepositoryStore: ObservableObject {
         mutate("Unstaging all changes") { root in
             try await self.client.unstage(at: root, paths: self.stagedChanges.map(\.path))
         }
+    }
+
+    private static func operationLabel(_ verb: String, paths: [String]) -> String {
+        paths.count == 1 ? "\(verb) \(paths[0])" : "\(verb) \(paths.count) files"
     }
 
     func createCommit() {
@@ -503,18 +596,32 @@ final class RepositoryStore: ObservableObject {
 
         if selectedSection == .history {
             showCommit(selectedCommit)
-        } else if let selectedChange {
-            let replacement = changes.first(where: { $0.path == selectedChange.path })
-            if selectedChangeIsStaged, replacement?.isStaged == true {
-                selectChange(replacement, staged: true)
-            } else if !selectedChangeIsStaged, replacement?.isUnstaged == true {
-                selectChange(replacement, staged: false)
-            } else if let replacement {
-                selectChange(replacement, staged: replacement.isStaged)
-            } else {
-                selectChange(nil, staged: false)
-            }
+        } else {
+            reconcileChangeSelection()
         }
+    }
+
+    /// Carries the change selection across a refresh. Rows whose file moved
+    /// between the index and the working tree follow the file to its new side;
+    /// rows whose file no longer has changes drop out.
+    private func reconcileChangeSelection() {
+        changeSelection.reconcile(order: changeOrder) { id in
+            guard let change = self.changes.first(where: { $0.path == id.path }) else {
+                return nil
+            }
+            if id.staged ? change.isStaged : change.isUnstaged {
+                return id
+            }
+            if change.isStaged {
+                return ChangeEntryID(path: id.path, staged: true)
+            }
+            if change.isUnstaged {
+                return ChangeEntryID(path: id.path, staged: false)
+            }
+            return nil
+        }
+        guard changeSelection.primary != nil || selectedChange != nil else { return }
+        showPrimaryChange(alwaysReloadDiff: true)
     }
 
     @discardableResult
@@ -578,6 +685,7 @@ final class RepositoryStore: ObservableObject {
         selectedStash = nil
         selectedCommit = nil
         selectedChange = nil
+        changeSelection.clear()
         selectedSection = .history
         commitMessage = ""
         amend = false

@@ -268,11 +268,14 @@ struct GitClient: Sendable {
         try await apply(patch, at: root, cached: false, reverse: true)
     }
 
-    func discard(at root: URL, change: WorkingChange) async throws {
-        if change.isUntracked {
-            _ = try await run(["clean", "-f", "--", change.path], in: root)
-        } else {
-            _ = try await run(["restore", "--worktree", "--", change.path], in: root)
+    func discard(at root: URL, changes: [WorkingChange]) async throws {
+        let tracked = changes.filter { !$0.isUntracked }.map(\.path)
+        let untracked = changes.filter(\.isUntracked).map(\.path)
+        if !tracked.isEmpty {
+            _ = try await run(["restore", "--worktree", "--"] + tracked, in: root)
+        }
+        if !untracked.isEmpty {
+            _ = try await run(["clean", "-f", "--"] + untracked, in: root)
         }
     }
 

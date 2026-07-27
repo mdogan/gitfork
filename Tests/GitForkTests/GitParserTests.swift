@@ -338,6 +338,46 @@ struct GitParserTests {
     }
 
     @Test
+    func discardsTrackedAndUntrackedFilesInOneOperation() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkDiscardTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let tracked = root.appendingPathComponent("tracked.txt")
+        let alsoTracked = root.appendingPathComponent("also tracked.txt")
+        let kept = root.appendingPathComponent("kept.txt")
+        try "one\n".write(to: tracked, atomically: true, encoding: .utf8)
+        try "one\n".write(to: alsoTracked, atomically: true, encoding: .utf8)
+        try "one\n".write(to: kept, atomically: true, encoding: .utf8)
+        try runGit(["add", "."], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        try "changed\n".write(to: tracked, atomically: true, encoding: .utf8)
+        try "changed\n".write(to: alsoTracked, atomically: true, encoding: .utf8)
+        try "changed\n".write(to: kept, atomically: true, encoding: .utf8)
+        let untracked = root.appendingPathComponent("untracked.txt")
+        try "new\n".write(to: untracked, atomically: true, encoding: .utf8)
+
+        let client = GitClient()
+        let changes = try await client.snapshot(at: root).changes
+        let discarded = changes.filter { $0.path != "kept.txt" }
+        #expect(discarded.count == 3)
+
+        try await client.discard(at: root, changes: discarded)
+
+        #expect(try String(contentsOf: tracked, encoding: .utf8) == "one\n")
+        #expect(try String(contentsOf: alsoTracked, encoding: .utf8) == "one\n")
+        #expect(FileManager.default.fileExists(atPath: untracked.path) == false)
+        // Files outside the selection keep their working-tree changes.
+        #expect(try String(contentsOf: kept, encoding: .utf8) == "changed\n")
+    }
+
+    @Test
     func loadsStashesAndLinkedWorktreesInRepositorySnapshot() async throws {
         let container = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitForkSidebarTests-\(UUID().uuidString)")
@@ -506,7 +546,7 @@ struct GitParserTests {
         try contents.write(to: file, atomically: true, encoding: .utf8)
         snapshot = try await client.snapshot(at: root)
         change = try #require(snapshot.changes.first { $0.path == "lines.txt" })
-        try await client.discard(at: root, change: change)
+        try await client.discard(at: root, changes: [change])
 
         let restored = try String(contentsOf: file, encoding: .utf8)
         #expect(!restored.contains("unstaged tail"))
@@ -596,7 +636,7 @@ struct GitParserTests {
 
         snapshot = try await client.snapshot(at: root)
         change = try #require(snapshot.changes.first { $0.path == "discard.txt" })
-        try await client.discard(at: root, change: change)
+        try await client.discard(at: root, changes: [change])
         #expect(!FileManager.default.fileExists(atPath: discardedFile.path))
     }
 

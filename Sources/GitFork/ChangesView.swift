@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ChangesView: View {
@@ -96,102 +97,175 @@ struct ChangesView: View {
 
 private struct ChangeList: View {
     @EnvironmentObject private var store: RepositoryStore
+    @State private var pendingDiscard: [ChangeEntry] = []
 
     var body: some View {
-        List(selection: changeSelection) {
-            if !store.changes.isEmpty {
-                Section {
-                    if stagedChanges.isEmpty {
-                        EmptyChangeRow(title: "No staged changes")
-                    } else {
-                        ForEach(stagedChanges) { item in
-                            ChangeRow(change: item.change, staged: item.staged)
-                                .tag(item)
-                        }
-                    }
-                } header: {
-                    ChangeSectionHeader(
-                        title: "Staged Changes",
-                        count: store.stagedChanges.count,
-                        systemImage: "checkmark.circle.fill",
-                        tint: GitForkTheme.green,
-                        actionTitle: "Unstage All",
-                        action: store.unstageAll
-                    )
-                }
-
-                Section {
-                    if unstagedChanges.isEmpty {
-                        EmptyChangeRow(title: "No unstaged changes")
-                    } else {
-                        ForEach(unstagedChanges) { item in
-                            ChangeRow(change: item.change, staged: item.staged)
-                                .tag(item)
-                        }
-                    }
-                } header: {
-                    ChangeSectionHeader(
-                        title: "Unstaged Changes",
-                        count: store.unstagedChanges.count,
-                        systemImage: "pencil.circle.fill",
-                        tint: GitForkTheme.accent,
-                        actionTitle: "Stage All",
-                        action: store.stageAll
-                    )
-                }
-            }
-        }
-        .listStyle(.inset)
-        .environment(\.defaultMinListRowHeight, 26)
-        .overlay {
-            if store.changes.isEmpty {
-                ContentUnavailableView(
-                    "Working Tree Clean",
-                    systemImage: "checkmark.circle",
-                    description: Text("There are no staged or unstaged changes.")
+        VStack(spacing: 0) {
+            if store.changeSelection.count > 1 {
+                SelectionActionBar(
+                    entries: store.selectedChangeEntries,
+                    requestDiscard: requestDiscard
                 )
+                Divider()
             }
+
+            List {
+                if !store.changes.isEmpty {
+                    Section {
+                        if stagedEntries.isEmpty {
+                            EmptyChangeRow(title: "No staged changes")
+                        } else {
+                            ForEach(stagedEntries) { entry in
+                                ChangeRow(entry: entry, requestDiscard: requestDiscard)
+                            }
+                        }
+                    } header: {
+                        ChangeSectionHeader(
+                            title: "Staged Changes",
+                            count: store.stagedChanges.count,
+                            systemImage: "checkmark.circle.fill",
+                            tint: GitForkTheme.green,
+                            actionTitle: "Unstage All",
+                            action: store.unstageAll
+                        )
+                    }
+
+                    Section {
+                        if unstagedEntries.isEmpty {
+                            EmptyChangeRow(title: "No unstaged changes")
+                        } else {
+                            ForEach(unstagedEntries) { entry in
+                                ChangeRow(entry: entry, requestDiscard: requestDiscard)
+                            }
+                        }
+                    } header: {
+                        ChangeSectionHeader(
+                            title: "Unstaged Changes",
+                            count: store.unstagedChanges.count,
+                            systemImage: "pencil.circle.fill",
+                            tint: GitForkTheme.accent,
+                            actionTitle: "Stage All",
+                            action: store.stageAll
+                        )
+                    }
+                }
+            }
+            .listStyle(.inset)
+            .environment(\.defaultMinListRowHeight, 26)
+            .overlay {
+                if store.changes.isEmpty {
+                    ContentUnavailableView(
+                        "Working Tree Clean",
+                        systemImage: "checkmark.circle",
+                        description: Text("There are no staged or unstaged changes.")
+                    )
+                }
+            }
+        }
+        .alert(
+            DiscardPrompt.title(for: pendingDiscard),
+            isPresented: Binding(
+                get: { !pendingDiscard.isEmpty },
+                set: { if !$0 { pendingDiscard = [] } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                pendingDiscard = []
+            }
+            Button("Discard", role: .destructive) {
+                store.discard(pendingDiscard)
+                pendingDiscard = []
+            }
+        } message: {
+            Text(DiscardPrompt.message(for: pendingDiscard))
         }
     }
 
-    private var stagedChanges: [PresentedChange] {
-        store.stagedChanges.map { PresentedChange($0, staged: true) }
+    private var stagedEntries: [ChangeEntry] {
+        store.changeEntries.stagedSide
     }
 
-    private var unstagedChanges: [PresentedChange] {
-        store.unstagedChanges.map { PresentedChange($0, staged: false) }
+    private var unstagedEntries: [ChangeEntry] {
+        store.changeEntries.unstagedSide
     }
 
-    private var changes: [PresentedChange] {
-        stagedChanges + unstagedChanges
-    }
-
-    private var changeSelection: Binding<PresentedChange?> {
-        Binding(
-            get: {
-                changes.first {
-                    $0.change == store.selectedChange
-                        && $0.staged == store.selectedChangeIsStaged
-                }
-            },
-            set: { item in
-                store.selectChange(item?.change, staged: item?.staged ?? false)
-            }
-        )
+    private func requestDiscard(_ entries: [ChangeEntry]) {
+        let targets = entries.unstagedSide
+        guard !targets.isEmpty else { return }
+        pendingDiscard = targets
     }
 }
 
-private struct PresentedChange: Hashable, Identifiable {
-    let change: WorkingChange
-    let staged: Bool
+/// Batch actions for the current multi-selection, shown above the list so the
+/// selection has a visible destination beyond the context menu.
+private struct SelectionActionBar: View {
+    @EnvironmentObject private var store: RepositoryStore
+    let entries: [ChangeEntry]
+    let requestDiscard: ([ChangeEntry]) -> Void
 
-    init(_ change: WorkingChange, staged: Bool) {
-        self.change = change
-        self.staged = staged
-    }
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "checklist")
+                .font(.caption)
+                .foregroundStyle(GitForkTheme.accent)
+            Text("\(entries.count) selected")
+                .font(.caption.weight(.medium))
 
-    var id: String {
-        "\(staged ? "staged" : "unstaged")|\(change.id)"
+            Spacer()
+
+            if !entries.unstagedSide.isEmpty {
+                Button {
+                    store.stage(entries)
+                } label: {
+                    Label("Stage", systemImage: "plus")
+                }
+                .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+                .font(.caption)
+                .help("Stage \(ChangeActionTitle.fileCount(entries.unstagedSide.count))")
+                .disabled(store.isLoading)
+            }
+
+            if !entries.stagedSide.isEmpty {
+                Button {
+                    store.unstage(entries)
+                } label: {
+                    Label("Unstage", systemImage: "minus")
+                }
+                .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+                .font(.caption)
+                .help("Unstage \(ChangeActionTitle.fileCount(entries.stagedSide.count))")
+                .disabled(store.isLoading)
+            }
+
+            if !entries.unstagedSide.isEmpty {
+                Button(role: .destructive) {
+                    requestDiscard(entries)
+                } label: {
+                    Label("Discard…", systemImage: "trash")
+                }
+                .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+                .font(.caption)
+                .foregroundStyle(GitForkTheme.red)
+                .help(
+                    "Permanently discard the working-tree changes in "
+                        + ChangeActionTitle.fileCount(entries.unstagedSide.count)
+                        + " after confirmation"
+                )
+                .disabled(store.isLoading)
+            }
+
+            Button {
+                store.clearChangeSelection()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption2)
+            }
+            .buttonStyle(GitForkHoverButtonStyle(.icon))
+            .help("Clear the selection")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(GitForkTheme.accent.opacity(0.08))
     }
 }
 
@@ -251,14 +325,22 @@ private struct EmptyChangeRow: View {
 
 private struct ChangeRow: View {
     @EnvironmentObject private var store: RepositoryStore
-    let change: WorkingChange
-    let staged: Bool
+    let entry: ChangeEntry
+    let requestDiscard: ([ChangeEntry]) -> Void
+
+    private var change: WorkingChange { entry.change }
+    private var staged: Bool { entry.staged }
+    private var isSelected: Bool { store.isSelected(entry) }
+
+    /// A menu opened on a selected row acts on the whole selection; one opened
+    /// on an unselected row acts on that row alone.
+    private var actionTargets: [ChangeEntry] {
+        isSelected ? store.selectedChangeEntries : [entry]
+    }
 
     var body: some View {
         let statusSymbol = change.statusSymbol(staged: staged)
-        Button {
-            store.selectChange(change, staged: staged)
-        } label: {
+        Button(action: handleClick) {
             HStack(spacing: 7) {
                 Text(statusSymbol)
                     .font(.caption2.monospaced().weight(.bold))
@@ -287,17 +369,116 @@ private struct ChangeRow: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(
-            GitForkHoverButtonStyle(
-                .compactRow(
-                    isSelected: store.selectedChange == change
-                        && store.selectedChangeIsStaged == staged
-                )
-            )
+        .buttonStyle(GitForkHoverButtonStyle(.compactRow(isSelected: isSelected)))
+        .help(
+            "View \(staged ? "staged" : "working tree") diff for \(change.path)"
+                + " · Shift-click for a range, Command-click to add or remove"
         )
-        .help("View \(staged ? "staged" : "working tree") diff for \(change.path)")
+        .contextMenu {
+            ChangeActionsMenu(entries: actionTargets, requestDiscard: requestDiscard)
+        }
         .listRowInsets(EdgeInsets(top: 1, leading: 7, bottom: 1, trailing: 7))
         .listRowBackground(Color.clear)
+    }
+
+    /// Standard macOS list behavior: Shift extends from the anchor, Command
+    /// toggles one row, a plain click replaces the selection.
+    private func handleClick() {
+        let modifiers = NSEvent.modifierFlags
+        if modifiers.contains(.shift) {
+            store.extendSelection(to: entry)
+        } else if modifiers.contains(.command) {
+            store.toggleSelection(of: entry)
+        } else {
+            store.selectChange(change, staged: staged)
+        }
+    }
+}
+
+private struct ChangeActionsMenu: View {
+    @EnvironmentObject private var store: RepositoryStore
+    let entries: [ChangeEntry]
+    let requestDiscard: ([ChangeEntry]) -> Void
+
+    var body: some View {
+        let stageable = entries.unstagedSide
+        let unstageable = entries.stagedSide
+
+        if !stageable.isEmpty {
+            Button {
+                store.stage(entries)
+            } label: {
+                Label(ChangeActionTitle.stage(stageable.count), systemImage: "plus")
+            }
+            .disabled(store.isLoading)
+        }
+
+        if !unstageable.isEmpty {
+            Button {
+                store.unstage(entries)
+            } label: {
+                Label(ChangeActionTitle.unstage(unstageable.count), systemImage: "minus")
+            }
+            .disabled(store.isLoading)
+        }
+
+        if !stageable.isEmpty {
+            Divider()
+
+            Button(role: .destructive) {
+                requestDiscard(entries)
+            } label: {
+                Label(ChangeActionTitle.discard(stageable.count), systemImage: "trash")
+            }
+            .disabled(store.isLoading)
+        }
+    }
+}
+
+private enum ChangeActionTitle {
+    static func fileCount(_ count: Int) -> String {
+        "\(count) file\(count == 1 ? "" : "s")"
+    }
+
+    static func stage(_ count: Int) -> String {
+        count == 1 ? "Stage File" : "Stage \(count) Files"
+    }
+
+    static func unstage(_ count: Int) -> String {
+        count == 1 ? "Unstage File" : "Unstage \(count) Files"
+    }
+
+    static func discard(_ count: Int) -> String {
+        count == 1 ? "Discard Changes…" : "Discard Changes in \(count) Files…"
+    }
+}
+
+/// Confirmation copy for discarding working-tree changes. Untracked files are
+/// deleted rather than reverted, so the prompt names them separately.
+private enum DiscardPrompt {
+    static func title(for entries: [ChangeEntry]) -> String {
+        entries.count == 1
+            ? "Discard All Changes in This File?"
+            : "Discard Changes in \(entries.count) Files?"
+    }
+
+    static func message(for entries: [ChangeEntry]) -> String {
+        let untracked = entries.filter(\.change.isUntracked).count
+        if entries.count == 1, let only = entries.first {
+            return only.change.isUntracked
+                ? "\(only.change.path) is untracked and will be permanently deleted. "
+                    + "This cannot be undone."
+                : "All unstaged changes in \(only.change.path) will be permanently discarded. "
+                    + "This cannot be undone."
+        }
+
+        var message = "All unstaged changes in \(entries.count) files will be "
+            + "permanently discarded."
+        if untracked > 0 {
+            message += " \(untracked) untracked file\(untracked == 1 ? " is" : "s are") "
+                + "among them and will be permanently deleted."
+        }
+        return message + " This cannot be undone."
     }
 }
 

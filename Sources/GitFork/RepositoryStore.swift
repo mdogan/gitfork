@@ -19,6 +19,7 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var operationLabel: String?
     @Published var selectedSection: WorkspaceSection = .history
+    @Published private(set) var historyScope: CommitHistoryScope = .all
     @Published var selectedCommit: GitCommit?
     @Published private(set) var selectedChange: WorkingChange?
     @Published private(set) var selectedChangeIsStaged = false
@@ -138,7 +139,17 @@ final class RepositoryStore: ObservableObject {
     func refresh() {
         guard let root = repositoryURL else { return }
         _ = startOperation("Refreshing") {
-            try await self.reload(root: root, revision: self.selectedReference?.fullName)
+            try await self.reload(root: root, historyScope: self.historyScope)
+        }
+    }
+
+    func selectChanges() {
+        selectedSection = .changes
+        historyScope = .all
+        selectedReference = nil
+        selectedStash = nil
+        if let change = changes.first {
+            selectChange(change, staged: change.isStaged)
         }
     }
 
@@ -305,7 +316,19 @@ final class RepositoryStore: ObservableObject {
             self.selectedStash = nil
             self.selectedReference = reference
             self.selectedSection = .history
-            try await self.reloadHistory(root: root, revision: reference?.fullName)
+            self.historyScope = CommitHistoryScope(revision: reference?.fullName)
+            try await self.reloadHistory(root: root, scope: self.historyScope)
+        }
+    }
+
+    func selectLostAndDanglingCommits() {
+        guard let root = repositoryURL else { return }
+        _ = startOperation("Loading unreachable commits") {
+            self.selectedStash = nil
+            self.selectedReference = nil
+            self.selectedSection = .history
+            self.historyScope = .lostAndDangling
+            try await self.reloadHistory(root: root, scope: self.historyScope)
         }
     }
 
@@ -444,6 +467,7 @@ final class RepositoryStore: ObservableObject {
             self.commitMessage = ""
             self.amend = false
             self.selectedSection = .history
+            self.historyScope = .all
         }
     }
 
@@ -489,6 +513,7 @@ final class RepositoryStore: ObservableObject {
         mutate("Checking out \(reference.name)") { root in
             try await self.client.checkout(at: root, reference: reference)
             self.selectedReference = nil
+            self.historyScope = .all
         }
     }
 
@@ -498,6 +523,7 @@ final class RepositoryStore: ObservableObject {
         mutate("Creating \(cleanName)") { root in
             try await self.client.createBranch(at: root, name: cleanName)
             self.selectedReference = nil
+            self.historyScope = .all
         }
     }
 
@@ -515,6 +541,7 @@ final class RepositoryStore: ObservableObject {
             }
             if self.selectedReference == reference {
                 self.selectedReference = nil
+                self.historyScope = .all
             }
         }
     }
@@ -526,6 +553,7 @@ final class RepositoryStore: ObservableObject {
             try await self.client.forceDelete(at: root, reference: reference)
             if self.selectedReference == reference {
                 self.selectedReference = nil
+                self.historyScope = .all
             }
         }
     }
@@ -589,14 +617,14 @@ final class RepositoryStore: ObservableObject {
             } catch {
                 try? await self.reload(
                     root: root,
-                    revision: self.selectedReference?.fullName,
+                    historyScope: self.historyScope,
                     scope: reloadScope
                 )
                 throw error
             }
             try await self.reload(
                 root: root,
-                revision: self.selectedReference?.fullName,
+                historyScope: self.historyScope,
                 scope: reloadScope
             )
         }
@@ -654,7 +682,7 @@ final class RepositoryStore: ObservableObject {
 
             isLoading = true
             defer { isLoading = false }
-            try await reload(root: root, revision: selectedReference?.fullName)
+            try await reload(root: root, historyScope: historyScope)
         } catch {
             // External Git operations can leave short-lived lock or ref states.
             // The next polling pass retries without interrupting the user.
@@ -663,22 +691,25 @@ final class RepositoryStore: ObservableObject {
 
     private func reload(
         root: URL,
-        revision: String? = nil,
+        historyScope: CommitHistoryScope = .all,
         scope: ReloadScope = .full
     ) async throws {
         switch scope {
         case .full:
-            try await reloadFull(root: root, revision: revision)
+            try await reloadFull(root: root, historyScope: historyScope)
         case .workingTree:
             try await reloadWorkingTree(root: root)
         }
     }
 
-    private func reloadFull(root: URL, revision: String?) async throws {
+    private func reloadFull(
+        root: URL,
+        historyScope: CommitHistoryScope
+    ) async throws {
         let previousChangeOrder = changeOrder
         let load = try await client.snapshotAndStateToken(
             at: root,
-            revision: revision
+            historyScope: historyScope
         )
         try Task.checkCancellation()
         guard isCurrentRepository(root) else { return }
@@ -734,10 +765,13 @@ final class RepositoryStore: ObservableObject {
         reconcileChangeSelection(previousOrder: previousChangeOrder)
     }
 
-    private func reloadHistory(root: URL, revision: String?) async throws {
+    private func reloadHistory(
+        root: URL,
+        scope: CommitHistoryScope
+    ) async throws {
         let loadedCommits = try await client.history(
             at: root,
-            revision: revision
+            scope: scope
         )
         try Task.checkCancellation()
         guard isCurrentRepository(root) else { return }
@@ -837,6 +871,7 @@ final class RepositoryStore: ObservableObject {
         diff = ""
         selectedReference = nil
         selectedStash = nil
+        historyScope = .all
         selectedCommit = nil
         selectedChange = nil
         changeSelection.clear()

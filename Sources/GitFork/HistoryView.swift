@@ -5,16 +5,19 @@ struct HistoryView: View {
 
     var body: some View {
         let commits = store.filteredCommits
-        let graph = store.searchText.isEmpty
-            ? CommitGraphLayout(commits: commits)
-            : CommitGraphLayout(
-                commits: commits,
-                connectingThrough: store.commits
-            )
+        let showsGraph = store.historyScope != .lostAndDangling
+        let graph = showsGraph
+            ? (store.searchText.isEmpty
+                ? CommitGraphLayout(commits: commits)
+                : CommitGraphLayout(
+                    commits: commits,
+                    connectingThrough: store.commits
+                ))
+            : nil
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(store.selectedReference?.name ?? "All Commits")
+                    Text(historyTitle)
                         .font(.headline)
                     Text("\(commits.count) commits")
                         .font(.caption)
@@ -29,17 +32,20 @@ struct HistoryView: View {
 
             if commits.isEmpty {
                 ContentUnavailableView(
-                    "No Commits",
-                    systemImage: "clock",
-                    description: Text(store.searchText.isEmpty ? "This repository has no commits yet." : "No commits match your search.")
+                    emptyTitle,
+                    systemImage: store.historyScope == .lostAndDangling
+                        ? "lifepreserver"
+                        : "clock",
+                    description: Text(emptyDescription)
                 )
             } else {
                 List(selection: commitSelection) {
                     ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
                         CommitRow(
                             commit: commit,
-                            graphRow: graph.rows[index],
-                            graphColumnCount: graph.columnCount
+                            graphRow: graph?.rows[index],
+                            graphColumnCount: graph?.columnCount ?? 0,
+                            showsGraph: showsGraph
                         )
                         .tag(commit)
                         .listRowInsets(
@@ -60,18 +66,50 @@ struct HistoryView: View {
             set: { store.selectCommit($0) }
         )
     }
+
+    private var historyTitle: String {
+        if let reference = store.selectedReference {
+            return reference.name
+        }
+        if store.historyScope == .lostAndDangling {
+            return "Unreachable Commits"
+        }
+        return "All Commits"
+    }
+
+    private var emptyTitle: String {
+        if !store.searchText.isEmpty {
+            return "No Matching Commits"
+        }
+        return store.historyScope == .lostAndDangling
+            ? "No Unreachable Commits"
+            : "No Commits"
+    }
+
+    private var emptyDescription: String {
+        if !store.searchText.isEmpty {
+            return "No commits match your search."
+        }
+        if store.historyScope == .lostAndDangling {
+            return "No commits are unreachable from this repository’s current references."
+        }
+        return "This repository has no commits yet."
+    }
 }
 
 private struct CommitRow: View {
     let commit: GitCommit
-    let graphRow: CommitGraphRow
+    let graphRow: CommitGraphRow?
     let graphColumnCount: Int
+    let showsGraph: Bool
 
     var body: some View {
         HStack(spacing: 8) {
-            Color.clear
-                .frame(width: graphWidth)
-                .accessibilityHidden(true)
+            if showsGraph {
+                Color.clear
+                    .frame(width: graphWidth)
+                    .accessibilityHidden(true)
+            }
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
@@ -122,13 +160,15 @@ private struct CommitRow: View {
             .padding(.vertical, 7)
         }
         .overlay(alignment: .leading) {
-            CommitGraph(
-                row: graphRow,
-                columnCount: graphColumnCount
-            )
-            .frame(width: graphWidth)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+            if showsGraph, let graphRow {
+                CommitGraph(
+                    row: graphRow,
+                    columnCount: graphColumnCount
+                )
+                .frame(width: graphWidth)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
         }
         .help(parentDescription)
         .accessibilityElement(children: .combine)

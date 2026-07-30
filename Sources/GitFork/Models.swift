@@ -14,6 +14,16 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
     }
 }
 
+enum CommitHistoryScope: Equatable, Sendable {
+    case all
+    case revision(String)
+    case lostAndDangling
+
+    init(revision: String?) {
+        self = revision.map(Self.revision) ?? .all
+    }
+}
+
 enum ReferenceKind: String, Sendable {
     case localBranch
     case remoteBranch

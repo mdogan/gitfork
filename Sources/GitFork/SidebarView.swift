@@ -29,11 +29,7 @@ struct SidebarView: View {
                     isSelected: store.selectedSection == .changes,
                     size: .regular
                 ) {
-                    store.selectedSection = .changes
-                    store.selectedReference = nil
-                    if let change = store.changes.first {
-                        store.selectChange(change, staged: change.isStaged)
-                    }
+                    store.selectChanges()
                 } badge: {
                     if !store.changes.isEmpty {
                         Text("\(store.changes.count)")
@@ -43,10 +39,26 @@ struct SidebarView: View {
                 SidebarRow(
                     title: WorkspaceSection.history.rawValue,
                     icon: WorkspaceSection.history.icon,
-                    isSelected: store.selectedSection == .history && store.selectedReference == nil,
+                    isSelected: store.selectedSection == .history
+                        && store.selectedReference == nil
+                        && store.selectedStash == nil
+                        && store.historyScope == .all,
                     size: .regular
                 ) {
                     store.selectReference(nil)
+                } badge: {
+                    EmptyView()
+                }
+
+                SidebarRow(
+                    title: "Unreachable Commits",
+                    icon: "lifepreserver",
+                    isSelected: store.selectedSection == .history
+                        && store.selectedStash == nil
+                        && store.historyScope == .lostAndDangling,
+                    indent: 29
+                ) {
+                    store.selectLostAndDanglingCommits()
                 } badge: {
                     EmptyView()
                 }

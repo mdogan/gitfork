@@ -910,6 +910,64 @@ struct GitParserTests {
     }
 
     @Test
+    func parsesLostAndDanglingCommitHashes() {
+        let first = String(repeating: "a", count: 40)
+        let second = String(repeating: "b", count: 40)
+        let output = """
+        unreachable commit \(first)
+        dangling tree \(String(repeating: "c", count: 40))
+        dangling commit \(second)
+        unreachable commit \(first)
+        notice: HEAD points to an unborn branch
+        """
+
+        #expect(
+            GitClient.parseLostAndDanglingCommitHashes(output) == [
+                first,
+                second
+            ]
+        )
+    }
+
+    @Test
+    func loadsCommitsAbandonedFromDeletedBranches() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkLostCommitTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try "main\n".write(
+            to: root.appendingPathComponent("main.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "main.txt"], at: root)
+        try runGit(["commit", "-m", "Main commit"], at: root)
+
+        try runGit(["switch", "-c", "abandoned"], at: root)
+        try "recover me\n".write(
+            to: root.appendingPathComponent("lost.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "lost.txt"], at: root)
+        try runGit(["commit", "-m", "Recoverable abandoned work"], at: root)
+        try runGit(["switch", "main"], at: root)
+        try runGit(["branch", "-D", "abandoned"], at: root)
+
+        let commits = try await GitClient().history(
+            at: root,
+            scope: .lostAndDangling
+        )
+
+        #expect(commits.map(\.subject) == ["Recoverable abandoned work"])
+        #expect(commits[0].signature.status == .none)
+    }
+
+    @Test
     func buildsExplicitNonForcePushAndNonPruningFetchArguments() {
         let existingUpstream = GitPushTarget(
             remote: "origin",

@@ -144,7 +144,7 @@ struct GitClient: Sendable {
     func snapshot(at root: URL, revision: String? = nil) async throws -> RepositorySnapshot {
         try await loadSnapshot(
             at: root,
-            revision: revision,
+            historyScope: CommitHistoryScope(revision: revision),
             includesStateToken: false
         ).snapshot
     }
@@ -153,9 +153,19 @@ struct GitClient: Sendable {
         at root: URL,
         revision: String? = nil
     ) async throws -> RepositoryLoad {
+        try await snapshotAndStateToken(
+            at: root,
+            historyScope: CommitHistoryScope(revision: revision)
+        )
+    }
+
+    func snapshotAndStateToken(
+        at root: URL,
+        historyScope: CommitHistoryScope
+    ) async throws -> RepositoryLoad {
         let load = try await loadSnapshot(
             at: root,
-            revision: revision,
+            historyScope: historyScope,
             includesStateToken: true
         )
         guard let stateToken = load.stateToken else {
@@ -166,7 +176,7 @@ struct GitClient: Sendable {
 
     private func loadSnapshot(
         at root: URL,
-        revision: String?,
+        historyScope: CommitHistoryScope,
         includesStateToken: Bool
     ) async throws -> (snapshot: RepositorySnapshot, stateToken: RepositoryStateToken?) {
         async let branchResult = runAllowingFailure(["symbolic-ref", "--quiet", "--short", "HEAD"], in: root)
@@ -178,7 +188,7 @@ struct GitClient: Sendable {
         async let refsResult = run(Self.referenceArguments, in: root)
         async let stashResult = run(Self.stashArguments, in: root)
         async let worktreeResult = run(Self.worktreeArguments, in: root)
-        async let history = history(at: root, revision: revision)
+        async let history = history(at: root, scope: historyScope)
 
         let branchCommand = try await branchResult
         let branch: String
@@ -248,6 +258,29 @@ struct GitClient: Sendable {
     }
 
     func history(at root: URL, revision: String? = nil) async throws -> [GitCommit] {
+        try await history(
+            at: root,
+            scope: CommitHistoryScope(revision: revision)
+        )
+    }
+
+    func history(
+        at root: URL,
+        scope: CommitHistoryScope
+    ) async throws -> [GitCommit] {
+        if scope == .lostAndDangling {
+            return try await lostAndDanglingCommits(at: root)
+        }
+
+        let revision: String?
+        switch scope {
+        case .all:
+            revision = nil
+        case let .revision(value):
+            revision = value
+        case .lostAndDangling:
+            preconditionFailure("Handled above.")
+        }
         let result = try await run(
             Self.historyArguments(revision: revision),
             in: root
@@ -264,6 +297,57 @@ struct GitClient: Sendable {
             "--pretty=format:\(unverifiedCommitFormat)",
             revision ?? "--all"
         ]
+    }
+
+    private func lostAndDanglingCommits(at root: URL) async throws -> [GitCommit] {
+        let fsck = try await run(
+            [
+                "fsck",
+                "--full",
+                "--no-reflogs",
+                "--unreachable",
+                "--no-progress"
+            ],
+            in: root
+        )
+        let hashes = Self.parseLostAndDanglingCommitHashes(
+            fsck.output + "\n" + fsck.error
+        )
+        guard !hashes.isEmpty else { return [] }
+
+        let revisions = hashes.joined(separator: "\n") + "\n--not\n--all\n"
+        let result = try await run(
+            [
+                "log",
+                "--topo-order",
+                "--max-count=300",
+                "--date=iso-strict",
+                "--pretty=format:\(Self.unverifiedCommitFormat)",
+                "--stdin"
+            ],
+            in: root,
+            input: Data(revisions.utf8)
+        )
+        return GitParser.parseCommits(result.output)
+    }
+
+    static func parseLostAndDanglingCommitHashes(_ text: String) -> [String] {
+        var seen = Set<String>()
+        return text.split(whereSeparator: \.isNewline).compactMap { line in
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard fields.count == 3,
+                  fields[1] == "commit",
+                  fields[0] == "unreachable" || fields[0] == "dangling" else {
+                return nil
+            }
+            let hash = String(fields[2])
+            guard !hash.isEmpty,
+                  hash.allSatisfy({ $0.isHexDigit }),
+                  seen.insert(hash).inserted else {
+                return nil
+            }
+            return hash
+        }
     }
 
     func stateToken(at root: URL) async throws -> RepositoryStateToken {

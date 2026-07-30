@@ -16,6 +16,16 @@ struct GitParserTests {
     }
 
     @Test
+    func ignoresPorcelainBranchHeaderWhenParsingChanges() {
+        let input = "## main...origin/main [ahead 1]\u{0} M working.swift\u{0}"
+        let changes = GitParser.parseStatus(Data(input.utf8))
+
+        #expect(changes.count == 1)
+        #expect(changes[0].path == "working.swift")
+        #expect(changes[0].isUnstaged)
+    }
+
+    @Test
     func presentsDualStateChangeAccordingToItsSection() {
         let change = WorkingChange(
             path: "dual-state.swift",
@@ -98,6 +108,7 @@ struct GitParserTests {
         #expect(hunk.rows.map { $0.old?.oldLineNumber } == [10, 11, 12, nil, 13])
         #expect(hunk.rows.map { $0.new?.newLineNumber } == [10, 11, 12, 13, 14])
         #expect(hunk.selectableLineIDs.count == 5)
+        #expect(sideBySide.rowCount == 5)
         // Column width covers context lines too, not just the changed ones.
         #expect(sideBySide.oldColumnCharacters == "context before".count)
         #expect(sideBySide.newColumnCharacters == "context before".count)
@@ -614,6 +625,36 @@ struct GitParserTests {
         try runGit(["branch", "feature/live-refresh"], at: root)
         let withBranch = try await client.stateToken(at: root)
         #expect(withBranch != editedAgain)
+    }
+
+    @Test
+    func fullAndWorkingTreeLoadsEstablishEquivalentMonitorTokens() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkMonitorBaselineTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let file = root.appendingPathComponent("README.md")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let client = GitClient()
+        let load = try await client.snapshotAndStateToken(at: root)
+        #expect(load.snapshot.changes.first?.path == "README.md")
+        #expect(load.stateToken == (try await client.stateToken(at: root)))
+
+        try "three\n".write(to: file, atomically: true, encoding: .utf8)
+        let workingTree = try await client.workingTreeSnapshot(at: root)
+        let updatedToken = load.stateToken.replacingWorkingTree(with: workingTree)
+
+        #expect(workingTree.changes.first?.path == "README.md")
+        #expect(updatedToken == (try await client.stateToken(at: root)))
     }
 
     @Test

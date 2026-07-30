@@ -7,6 +7,84 @@ struct RepositoryStateToken: Equatable, Sendable {
     let stashes: String
     let worktrees: String
     let workingTreeMetadata: String
+
+    func replacingWorkingTree(with snapshot: WorkingTreeSnapshot) -> Self {
+        Self(
+            status: snapshot.status,
+            stagedDiff: snapshot.stagedDiff,
+            references: references,
+            stashes: stashes,
+            worktrees: worktrees,
+            workingTreeMetadata: snapshot.workingTreeMetadata
+        )
+    }
+}
+
+struct WorkingTreeSnapshot: Sendable {
+    let changes: [WorkingChange]
+    let status: String
+    let stagedDiff: String
+    let workingTreeMetadata: String
+}
+
+struct RepositoryLoad: Sendable {
+    let snapshot: RepositorySnapshot
+    let stateToken: RepositoryStateToken
+}
+
+private final class GitProcessCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+    private var terminationRequested = false
+
+    func install(_ process: Process) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled else { return false }
+        self.process = process
+        return true
+    }
+
+    func processDidStart() {
+        lock.lock()
+        let process = processToTerminate()
+        lock.unlock()
+        process?.terminate()
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let process = processToTerminate()
+        lock.unlock()
+        process?.terminate()
+    }
+
+    func clear(_ process: Process) {
+        lock.lock()
+        if self.process === process {
+            self.process = nil
+        }
+        lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    private func processToTerminate() -> Process? {
+        guard cancelled,
+              !terminationRequested,
+              let process,
+              process.isRunning else {
+            return nil
+        }
+        terminationRequested = true
+        return process
+    }
 }
 
 struct GitClient: Sendable {
@@ -15,6 +93,47 @@ struct GitClient: Sendable {
         "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%G?%x1f%GK%x1f%GS%x1f%GG%x1f%s%x1e"
     private static let unverifiedCommitFormat =
         "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1fN%x1f%x1f%x1f%x1f%s%x1e"
+    private static let statusArguments = [
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v1",
+        "--branch",
+        "-z",
+        "--untracked-files=all"
+    ]
+    private static let stagedDiffArguments = [
+        "--no-optional-locks",
+        "diff",
+        "--cached",
+        "--raw",
+        "--no-renames",
+        "--no-ext-diff"
+    ]
+    private static let referenceArguments = [
+        "for-each-ref",
+        "--format=%(refname)%1f%(objectname:short)%1f%(objectname)%1f%(upstream)%1f%(upstream:track)",
+        "refs/heads", "refs/remotes", "refs/tags"
+    ]
+    private static let stashArguments = [
+        "stash",
+        "list",
+        "--format=%gd%x1f%H%x1f%gs%x1e"
+    ]
+    private static let worktreeArguments = [
+        "worktree",
+        "list",
+        "--porcelain",
+        "-z"
+    ]
+    private static let processEnvironment: [String: String] = {
+        var environment = ProcessInfo.processInfo.environment
+        environment["LC_ALL"] = "C"
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        environment["PATH"] = commandSearchPath(
+            inheritedPath: environment["PATH"]
+        )
+        return environment
+    }()
 
     func repositoryRoot(from directory: URL) async throws -> URL {
         let result = try await run(["rev-parse", "--show-toplevel"], in: directory)
@@ -23,25 +142,43 @@ struct GitClient: Sendable {
     }
 
     func snapshot(at root: URL, revision: String? = nil) async throws -> RepositorySnapshot {
+        try await loadSnapshot(
+            at: root,
+            revision: revision,
+            includesStateToken: false
+        ).snapshot
+    }
+
+    func snapshotAndStateToken(
+        at root: URL,
+        revision: String? = nil
+    ) async throws -> RepositoryLoad {
+        let load = try await loadSnapshot(
+            at: root,
+            revision: revision,
+            includesStateToken: true
+        )
+        guard let stateToken = load.stateToken else {
+            preconditionFailure("A repository state token was requested but not loaded.")
+        }
+        return RepositoryLoad(snapshot: load.snapshot, stateToken: stateToken)
+    }
+
+    private func loadSnapshot(
+        at root: URL,
+        revision: String?,
+        includesStateToken: Bool
+    ) async throws -> (snapshot: RepositorySnapshot, stateToken: RepositoryStateToken?) {
         async let branchResult = runAllowingFailure(["symbolic-ref", "--quiet", "--short", "HEAD"], in: root)
-        async let statusResult = run(["status", "--porcelain=v1", "-z", "--untracked-files=all"], in: root)
-        async let refsResult = run([
-            "for-each-ref",
-            "--format=%(refname)%1f%(objectname:short)%1f%(objectname)",
-            "refs/heads", "refs/remotes", "refs/tags"
-        ], in: root)
-        async let stashResult = run([
-            "stash",
-            "list",
-            "--format=%gd%x1f%H%x1f%gs%x1e"
-        ], in: root)
-        async let worktreeResult = run([
-            "worktree",
-            "list",
-            "--porcelain",
-            "-z"
-        ], in: root)
-        async let history = commits(at: root, revision: revision)
+        async let statusResult = run(Self.statusArguments, in: root)
+        async let stagedDiffResult = loadStagedDiff(
+            at: root,
+            included: includesStateToken
+        )
+        async let refsResult = run(Self.referenceArguments, in: root)
+        async let stashResult = run(Self.stashArguments, in: root)
+        async let worktreeResult = run(Self.worktreeArguments, in: root)
+        async let history = history(at: root, revision: revision)
 
         let branchCommand = try await branchResult
         let branch: String
@@ -66,6 +203,7 @@ struct GitClient: Sendable {
         let stashes = try await stashResult
         let worktrees = try await worktreeResult
         let commits = try await history
+        let stagedDiff = try await stagedDiffResult
         let upstreamCommand = try await upstreamResult
         let countsCommand = try await countsResult
         let upstream = upstreamCommand.exitCode == 0
@@ -79,22 +217,37 @@ struct GitClient: Sendable {
 
         let counts = countsCommand.output.split(whereSeparator: \.isWhitespace).compactMap { Int($0) }
 
-        return RepositorySnapshot(
+        let changes = GitParser.parseStatus(Data(status.output.utf8))
+        let snapshot = RepositorySnapshot(
             root: root,
             branch: branch,
             upstream: upstream,
             pushTarget: pushTarget,
             ahead: counts.first ?? 0,
             behind: counts.dropFirst().first ?? 0,
-            changes: GitParser.parseStatus(Data(status.output.utf8)),
+            changes: changes,
             references: GitParser.parseReferences(refs.output, currentBranch: branch),
             stashes: GitParser.parseStashes(stashes.output),
             worktrees: GitParser.parseWorktrees(worktrees.output, currentRoot: root),
             commits: commits
         )
+        let stateToken = includesStateToken
+            ? RepositoryStateToken(
+                status: status.output,
+                stagedDiff: stagedDiff.output,
+                references: refs.output,
+                stashes: stashes.output,
+                worktrees: worktrees.output,
+                workingTreeMetadata: workingTreeMetadata(
+                    from: changes,
+                    at: root
+                )
+            )
+            : nil
+        return (snapshot, stateToken)
     }
 
-    private func commits(at root: URL, revision: String? = nil) async throws -> [GitCommit] {
+    func history(at root: URL, revision: String? = nil) async throws -> [GitCommit] {
         let result = try await run(
             Self.historyArguments(revision: revision),
             in: root
@@ -113,52 +266,49 @@ struct GitClient: Sendable {
     }
 
     func stateToken(at root: URL) async throws -> RepositoryStateToken {
-        async let statusResult = run([
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "--branch",
-            "-z",
-            "--untracked-files=all"
-        ], in: root)
-        async let stagedDiffResult = run([
-            "diff",
-            "--cached",
-            "--raw",
-            "--no-renames",
-            "--no-ext-diff"
-        ], in: root)
-        async let referencesResult = run([
-            "for-each-ref",
-            "--format=%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)",
-            "refs/heads", "refs/remotes", "refs/tags"
-        ], in: root)
-        async let stashResult = run([
-            "stash",
-            "list",
-            "--format=%gd%x00%H%x00%gs%x1e"
-        ], in: root)
-        async let worktreeResult = run([
-            "worktree",
-            "list",
-            "--porcelain",
-            "-z"
-        ], in: root)
+        async let workingTree = workingTreeSnapshot(at: root)
+        async let referencesResult = run(Self.referenceArguments, in: root)
+        async let stashResult = run(Self.stashArguments, in: root)
+        async let worktreeResult = run(Self.worktreeArguments, in: root)
 
-        let status = try await statusResult
-        let stagedDiff = try await stagedDiffResult
+        let workingTreeSnapshot = try await workingTree
         let references = try await referencesResult
         let stashes = try await stashResult
         let worktrees = try await worktreeResult
 
         return RepositoryStateToken(
-            status: status.output,
-            stagedDiff: stagedDiff.output,
+            status: workingTreeSnapshot.status,
+            stagedDiff: workingTreeSnapshot.stagedDiff,
             references: references.output,
             stashes: stashes.output,
             worktrees: worktrees.output,
-            workingTreeMetadata: workingTreeMetadata(from: status.output, at: root)
+            workingTreeMetadata: workingTreeSnapshot.workingTreeMetadata
         )
+    }
+
+    func workingTreeSnapshot(at root: URL) async throws -> WorkingTreeSnapshot {
+        async let statusResult = run(Self.statusArguments, in: root)
+        async let stagedDiffResult = run(Self.stagedDiffArguments, in: root)
+
+        let status = try await statusResult
+        let stagedDiff = try await stagedDiffResult
+        let changes = GitParser.parseStatus(Data(status.output.utf8))
+        return WorkingTreeSnapshot(
+            changes: changes,
+            status: status.output,
+            stagedDiff: stagedDiff.output,
+            workingTreeMetadata: workingTreeMetadata(from: changes, at: root)
+        )
+    }
+
+    private func loadStagedDiff(
+        at root: URL,
+        included: Bool
+    ) async throws -> GitCommandResult {
+        guard included else {
+            return GitCommandResult(output: "", error: "", exitCode: 0)
+        }
+        return try await run(Self.stagedDiffArguments, in: root)
     }
 
     func diff(
@@ -201,9 +351,10 @@ struct GitClient: Sendable {
         return result.output.isEmpty ? "No textual changes." : result.output
     }
 
-    private func workingTreeMetadata(from status: String, at root: URL) -> String {
-        let changes = GitParser.parseStatus(Data(status.utf8))
-            .filter { $0.indexStatus != "#" }
+    private func workingTreeMetadata(
+        from changes: [WorkingChange],
+        at root: URL
+    ) -> String {
         let fileManager = FileManager.default
 
         return changes.map { change in
@@ -792,49 +943,58 @@ struct GitClient: Sendable {
         input: Data?
     ) async throws -> GitCommandResult {
         let gitURL = self.gitURL
-        return try await Task.detached(priority: .userInitiated) {
-            let process = Process()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            let inputPipe = input == nil ? nil : Pipe()
-            process.executableURL = gitURL
-            process.arguments = arguments
-            process.currentDirectoryURL = directory
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            process.standardInput = inputPipe
+        let cancellation = GitProcessCancellation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await Task.detached(priority: .userInitiated) {
+                let process = Process()
+                guard cancellation.install(process) else {
+                    throw CancellationError()
+                }
+                defer { cancellation.clear(process) }
 
-            var environment = ProcessInfo.processInfo.environment
-            environment["LC_ALL"] = "C"
-            environment["GIT_TERMINAL_PROMPT"] = "0"
-            environment["PATH"] = Self.commandSearchPath(
-                inheritedPath: environment["PATH"]
-            )
-            process.environment = environment
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                let inputPipe = input == nil ? nil : Pipe()
+                process.executableURL = gitURL
+                process.arguments = arguments
+                process.currentDirectoryURL = directory
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+                process.standardInput = inputPipe
 
-            try process.run()
+                process.environment = Self.processEnvironment
 
-            if let input, let inputPipe {
-                inputPipe.fileHandleForWriting.write(input)
-                try inputPipe.fileHandleForWriting.close()
-            }
+                try process.run()
+                cancellation.processDidStart()
 
-            let outputTask = Task.detached {
-                outputPipe.fileHandleForReading.readDataToEndOfFile()
-            }
-            let errorTask = Task.detached {
-                errorPipe.fileHandleForReading.readDataToEndOfFile()
-            }
+                if let input, let inputPipe {
+                    inputPipe.fileHandleForWriting.write(input)
+                    try inputPipe.fileHandleForWriting.close()
+                }
 
-            process.waitUntilExit()
-            let outputData = await outputTask.value
-            let errorData = await errorTask.value
+                let outputTask = Task.detached {
+                    outputPipe.fileHandleForReading.readDataToEndOfFile()
+                }
+                let errorTask = Task.detached {
+                    errorPipe.fileHandleForReading.readDataToEndOfFile()
+                }
 
-            return GitCommandResult(
-                output: String(decoding: outputData, as: UTF8.self),
-                error: String(decoding: errorData, as: UTF8.self),
-                exitCode: process.terminationStatus
-            )
-        }.value
+                process.waitUntilExit()
+                let outputData = await outputTask.value
+                let errorData = await errorTask.value
+                if cancellation.isCancelled {
+                    throw CancellationError()
+                }
+
+                return GitCommandResult(
+                    output: String(decoding: outputData, as: UTF8.self),
+                    error: String(decoding: errorData, as: UTF8.self),
+                    exitCode: process.terminationStatus
+                )
+            }.value
+        } onCancel: {
+            cancellation.cancel()
+        }
     }
 }

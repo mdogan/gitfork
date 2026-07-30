@@ -102,6 +102,9 @@ private struct ChangeList: View {
     @FocusState private var isListFocused: Bool
 
     var body: some View {
+        let entries = store.changeEntries
+        let stagedEntries = entries.stagedSide
+        let unstagedEntries = entries.unstagedSide
         VStack(spacing: 0) {
             if store.changeSelection.count > 1 {
                 SelectionActionBar(
@@ -129,7 +132,7 @@ private struct ChangeList: View {
                     } header: {
                         ChangeSectionHeader(
                             title: "Staged Changes",
-                            count: store.stagedChanges.count,
+                            count: stagedEntries.count,
                             systemImage: "checkmark.circle.fill",
                             tint: GitForkTheme.green,
                             actionTitle: "Unstage All",
@@ -153,7 +156,7 @@ private struct ChangeList: View {
                     } header: {
                         ChangeSectionHeader(
                             title: "Unstaged Changes",
-                            count: store.unstagedChanges.count,
+                            count: unstagedEntries.count,
                             systemImage: "pencil.circle.fill",
                             tint: GitForkTheme.accent,
                             actionTitle: "Stage All",
@@ -201,14 +204,6 @@ private struct ChangeList: View {
         } message: {
             Text(DiscardPrompt.message(for: pendingDiscard))
         }
-    }
-
-    private var stagedEntries: [ChangeEntry] {
-        store.changeEntries.stagedSide
-    }
-
-    private var unstagedEntries: [ChangeEntry] {
-        store.changeEntries.unstagedSide
     }
 
     private var primarySelection: Binding<ChangeEntryID?> {

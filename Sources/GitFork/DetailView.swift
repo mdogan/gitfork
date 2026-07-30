@@ -303,18 +303,54 @@ private struct CopyableValue: View {
     }
 }
 
+private struct ParsedUnifiedDiff: Sendable {
+    let source: String
+    let document: UnifiedDiff
+
+    static let empty = ParsedUnifiedDiff(source: "", document: UnifiedDiff(""))
+}
+
+private struct ParsedSideBySideDiff: Sendable {
+    let source: String
+    let document: SideBySideDiff
+
+    static let empty = ParsedSideBySideDiff(
+        source: "",
+        document: SideBySideDiff(UnifiedDiff(""))
+    )
+}
+
+private enum DiffParsing {
+    static func unified(_ source: String) async -> ParsedUnifiedDiff {
+        await Task.detached(priority: .userInitiated) {
+            ParsedUnifiedDiff(source: source, document: UnifiedDiff(source))
+        }.value
+    }
+
+    static func sideBySide(_ source: String) async -> ParsedSideBySideDiff {
+        await Task.detached(priority: .userInitiated) {
+            ParsedSideBySideDiff(
+                source: source,
+                document: SideBySideDiff(UnifiedDiff(source))
+            )
+        }.value
+    }
+}
+
 private struct DiffTextView: View {
     @EnvironmentObject private var store: RepositoryStore
     let text: String
     var change: WorkingChange?
     var staged = false
 
+    @State private var parsedDiff = ParsedUnifiedDiff.empty
+    @State private var showsLargeDiff = false
     @State private var selectedDisplayLineIDs: Set<Int> = []
     @State private var selectedHunkID: Int?
     @State private var pendingDiscardLineIDs: Set<Int>?
 
     private var document: UnifiedDiff {
-        UnifiedDiff(text)
+        parsedDiff.document
     }
 
     var body: some View {
@@ -327,6 +363,20 @@ private struct DiffTextView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if parsedDiff.source != text {
+                VStack {
+                    ProgressView()
+                    Text("Preparing diff…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if document.lines.count > DiffLayout.automaticLineLimit,
+                      !showsLargeDiff {
+                LargeDiffPlaceholder(
+                    lineCount: document.lines.count,
+                    action: { showsLargeDiff = true }
+                )
             } else {
                 GeometryReader { viewport in
                     ScrollView([.horizontal, .vertical]) {
@@ -393,8 +443,18 @@ private struct DiffTextView: View {
                 }
             }
         }
+        .task(id: text) {
+            guard !text.isEmpty else {
+                parsedDiff = .empty
+                return
+            }
+            let parsed = await DiffParsing.unified(text)
+            guard !Task.isCancelled, parsed.source == text else { return }
+            parsedDiff = parsed
+        }
         .onChange(of: text) {
             clearSelection()
+            showsLargeDiff = false
         }
         .alert(
             discardTitle,
@@ -476,6 +536,8 @@ private struct DiffTextView: View {
 struct SideBySideDiffWindow: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @StateObject private var model: SideBySideDiffWindowStore
+    @State private var parsedDiff = ParsedSideBySideDiff.empty
+    @State private var showsLargeDiff = false
 
     init(state: SideBySideDiffWindowState) {
         _model = StateObject(
@@ -484,7 +546,7 @@ struct SideBySideDiffWindow: View {
     }
 
     private var document: SideBySideDiff {
-        SideBySideDiff(UnifiedDiff(model.displayedDiff))
+        parsedDiff.document
     }
 
     private var windowTitle: String {
@@ -546,6 +608,20 @@ struct SideBySideDiffWindow: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if parsedDiff.source != model.displayedDiff {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Preparing side-by-side diff…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if document.rowCount > DiffLayout.automaticLineLimit,
+                      !showsLargeDiff {
+                LargeDiffPlaceholder(
+                    lineCount: document.rowCount,
+                    action: { showsLargeDiff = true }
+                )
             } else if document.isEmpty {
                 ContentUnavailableView(
                     "No Side-by-Side Changes",
@@ -574,6 +650,21 @@ struct SideBySideDiffWindow: View {
         .frame(minWidth: 760, minHeight: 480)
         .navigationTitle(windowTitle)
         .tint(GitForkTheme.accent)
+        .task(id: model.displayedDiff) {
+            let source = model.displayedDiff
+            guard !source.isEmpty else {
+                parsedDiff = .empty
+                return
+            }
+            let parsed = await DiffParsing.sideBySide(source)
+            guard !Task.isCancelled, parsed.source == model.displayedDiff else {
+                return
+            }
+            parsedDiff = parsed
+        }
+        .onChange(of: model.displayedDiff) {
+            showsLargeDiff = false
+        }
         .onExitCommand {
             dismissWindow(
                 id: GitForkApp.sideBySideDiffWindowID,
@@ -622,12 +713,14 @@ private struct CommitDiffFileView: View {
 
             Divider()
 
-            ForEach(contentLines) { line in
-                DiffLineView(
-                    line: line,
-                    isRangeSelected: false,
-                    allowsTextSelection: true
-                )
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(contentLines) { line in
+                    DiffLineView(
+                        line: line,
+                        isRangeSelected: false,
+                        allowsTextSelection: true
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -642,6 +735,7 @@ private struct CommitDiffFileView: View {
 
 private enum DiffLayout {
     static let rowHeight: CGFloat = 20
+    static let automaticLineLimit = 20_000
     static let lineNumberWidth: CGFloat = 34
     static let accentBarWidth: CGFloat = 2.5
     static let textPadding: CGFloat = 9
@@ -656,6 +750,28 @@ private enum DiffLayout {
         .monospacedSystemFont(ofSize: 12, weight: .regular)
         .maximumAdvancement
         .width
+}
+
+private struct LargeDiffPlaceholder: View {
+    let lineCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("Large Diff")
+                .font(.headline)
+            Text("\(lineCount.formatted()) lines are ready to display.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Button("Display Diff", action: action)
+                .buttonStyle(.borderedProminent)
+                .help("Render this large diff")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 /// Stage, unstage, and discard actions for a set of diff lines. Shared by the
@@ -772,7 +888,7 @@ private struct DiffHunkView: View {
             .background(Color.primary.opacity(0.035))
 
             ZStack(alignment: .topTrailing) {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(hunk.lines) { line in
                         DiffLineView(
                             line: line,
@@ -972,7 +1088,7 @@ private struct SideBySideHunkView: View {
             .frame(width: totalWidth, alignment: .leading)
             .background(Color.primary.opacity(0.035))
 
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(hunk.rows) { row in
                     SideBySideRowView(
                         row: row,

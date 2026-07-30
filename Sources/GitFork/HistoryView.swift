@@ -4,12 +4,13 @@ struct HistoryView: View {
     @EnvironmentObject private var store: RepositoryStore
 
     var body: some View {
+        let commits = store.filteredCommits
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(store.selectedReference?.name ?? "All Commits")
                         .font(.headline)
-                    Text("\(store.filteredCommits.count) commits")
+                    Text("\(commits.count) commits")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -20,14 +21,14 @@ struct HistoryView: View {
 
             Divider()
 
-            if store.filteredCommits.isEmpty {
+            if commits.isEmpty {
                 ContentUnavailableView(
                     "No Commits",
                     systemImage: "clock",
                     description: Text(store.searchText.isEmpty ? "This repository has no commits yet." : "No commits match your search.")
                 )
             } else {
-                List(store.filteredCommits, selection: commitSelection) { commit in
+                List(commits, selection: commitSelection) { commit in
                     CommitRow(commit: commit)
                         .tag(commit)
                         .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 10))

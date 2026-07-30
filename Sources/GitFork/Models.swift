@@ -355,6 +355,10 @@ enum GitParser {
             }
 
             let status = Array(field.prefix(2))
+            guard status[0] != "#" else {
+                index += 1
+                continue
+            }
             let pathStart = field.index(field.startIndex, offsetBy: 3)
             let path = String(field[pathStart...])
             var originalPath: String?

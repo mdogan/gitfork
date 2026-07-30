@@ -1,14 +1,14 @@
 import Foundation
 
 /// Which version of a file a side-by-side column represents.
-enum SideBySideDiffSide {
+enum SideBySideDiffSide: Sendable {
     case old
     case new
 }
 
 /// One row of a side-by-side comparison. A side is `nil` when that version of
 /// the file has no counterpart for the row, which renders as a filler cell.
-struct SideBySideDiffRow: Identifiable, Equatable {
+struct SideBySideDiffRow: Identifiable, Equatable, Sendable {
     let id: Int
     let old: UnifiedDiffLine?
     let new: UnifiedDiffLine?
@@ -18,7 +18,7 @@ struct SideBySideDiffRow: Identifiable, Equatable {
     }
 }
 
-struct SideBySideDiffHunk: Identifiable, Equatable {
+struct SideBySideDiffHunk: Identifiable, Equatable, Sendable {
     let id: Int
     let header: UnifiedDiffLine
     let rows: [SideBySideDiffRow]
@@ -31,7 +31,7 @@ struct SideBySideDiffHunk: Identifiable, Equatable {
 /// Deletions and additions that sit next to each other are paired row by row so
 /// a rewritten line appears opposite its replacement; the longer run pads the
 /// shorter side with empty cells.
-struct SideBySideDiff: Equatable {
+struct SideBySideDiff: Equatable, Sendable {
     let hunks: [SideBySideDiffHunk]
 
     /// Width, in monospaced character cells, of the widest line in each column.
@@ -41,6 +41,10 @@ struct SideBySideDiff: Equatable {
 
     var isEmpty: Bool {
         hunks.isEmpty
+    }
+
+    var rowCount: Int {
+        hunks.reduce(0) { $0 + $1.rows.count }
     }
 
     init(_ document: UnifiedDiff) {

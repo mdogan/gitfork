@@ -42,9 +42,14 @@ final class RepositoryStore: ObservableObject {
 
     private let client = GitClient()
     private var loadGeneration = 0
+    private var detailTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var monitoredState: RepositoryStateToken?
+    private var isMonitoringActive = true
     private var activeOperationID: UUID?
+    private var cachedCommitHash: String?
+    private var cachedCommitDetails: String?
+    private var cachedVerifiedCommit: GitCommit?
     private let recentKey = "recentRepositories"
     private static let signCommitKey = "signCommitsWithGPG"
     private static let monitorInterval: Duration = .seconds(2)
@@ -143,39 +148,64 @@ final class RepositoryStore: ObservableObject {
     }
 
     private func showCommit(_ commit: GitCommit?) {
+        detailTask?.cancel()
+        detailTask = nil
         selectedCommit = commit
         selectedChange = nil
         guard let root = repositoryURL, let commit else {
             diff = ""
             return
         }
-        diff = ""
+
+        let usesCache = cachedCommitHash == commit.hash
+        if usesCache, let cachedVerifiedCommit {
+            replaceCommit(cachedVerifiedCommit)
+            selectedCommit = cachedVerifiedCommit
+        }
+        diff = usesCache ? cachedCommitDetails ?? "" : ""
+        guard !usesCache
+                || cachedCommitDetails == nil
+                || cachedVerifiedCommit == nil else {
+            return
+        }
+
         loadGeneration += 1
         let generation = loadGeneration
-        Task {
+        detailTask = Task {
             do {
                 async let detailsResult = client.commitDetails(at: root, hash: commit.hash)
                 async let verifiedCommitResult = client.commit(
                     at: root,
                     revision: commit.hash
                 )
-                let details = try await detailsResult
-                if generation == loadGeneration {
-                    diff = details
+                let (details, verifiedCommit) = try await (
+                    detailsResult,
+                    verifiedCommitResult
+                )
+                try Task.checkCancellation()
+                guard generation == loadGeneration,
+                      selectedCommit?.hash == verifiedCommit.hash else {
+                    return
                 }
-                let verifiedCommit = try await verifiedCommitResult
-                if generation == loadGeneration,
-                   selectedCommit?.hash == verifiedCommit.hash {
-                    if let index = commits.firstIndex(where: {
-                        $0.hash == verifiedCommit.hash
-                    }) {
-                        commits[index] = verifiedCommit
-                    }
-                    selectedCommit = verifiedCommit
-                }
+                cachedCommitHash = verifiedCommit.hash
+                cachedCommitDetails = details
+                cachedVerifiedCommit = verifiedCommit
+                diff = details
+                replaceCommit(verifiedCommit)
+                selectedCommit = verifiedCommit
+            } catch is CancellationError {
+                // A newer selection superseded this detail load.
             } catch {
-                show(error)
+                if generation == loadGeneration {
+                    show(error)
+                }
             }
+        }
+    }
+
+    private func replaceCommit(_ commit: GitCommit) {
+        if let index = commits.firstIndex(where: { $0.hash == commit.hash }) {
+            commits[index] = commit
         }
     }
 
@@ -239,6 +269,8 @@ final class RepositoryStore: ObservableObject {
     }
 
     private func showChange(_ change: WorkingChange?, staged: Bool) {
+        detailTask?.cancel()
+        detailTask = nil
         selectedStash = nil
         selectedChange = change
         selectedChangeIsStaged = staged
@@ -250,14 +282,19 @@ final class RepositoryStore: ObservableObject {
         diff = ""
         loadGeneration += 1
         let generation = loadGeneration
-        Task {
+        detailTask = Task {
             do {
                 let patch = try await client.diff(at: root, change: change, staged: staged)
+                try Task.checkCancellation()
                 if generation == loadGeneration {
                     diff = patch
                 }
+            } catch is CancellationError {
+                // A newer selection superseded this diff load.
             } catch {
-                show(error)
+                if generation == loadGeneration {
+                    show(error)
+                }
             }
         }
     }
@@ -268,7 +305,7 @@ final class RepositoryStore: ObservableObject {
             self.selectedStash = nil
             self.selectedReference = reference
             self.selectedSection = .history
-            try await self.reload(root: root, revision: reference?.fullName)
+            try await self.reloadHistory(root: root, revision: reference?.fullName)
         }
     }
 
@@ -301,7 +338,10 @@ final class RepositoryStore: ObservableObject {
     func stage(_ entries: [ChangeEntry]) {
         let paths = entries.unstagedSide.paths
         guard !paths.isEmpty else { return }
-        mutate(Self.operationLabel("Staging", paths: paths)) { root in
+        mutate(
+            Self.operationLabel("Staging", paths: paths),
+            reloadScope: .workingTree
+        ) { root in
             try await self.client.stage(at: root, paths: paths)
         }
     }
@@ -310,25 +350,37 @@ final class RepositoryStore: ObservableObject {
     func unstage(_ entries: [ChangeEntry]) {
         let paths = entries.stagedSide.paths
         guard !paths.isEmpty else { return }
-        mutate(Self.operationLabel("Unstaging", paths: paths)) { root in
+        mutate(
+            Self.operationLabel("Unstaging", paths: paths),
+            reloadScope: .workingTree
+        ) { root in
             try await self.client.unstage(at: root, paths: paths)
         }
     }
 
     func stage(_ patch: String, in change: WorkingChange) {
-        mutate("Staging selected lines in \(change.path)") { root in
+        mutate(
+            "Staging selected lines in \(change.path)",
+            reloadScope: .workingTree
+        ) { root in
             try await self.client.stage(at: root, patch: patch)
         }
     }
 
     func unstage(_ patch: String, in change: WorkingChange) {
-        mutate("Unstaging selected lines in \(change.path)") { root in
+        mutate(
+            "Unstaging selected lines in \(change.path)",
+            reloadScope: .workingTree
+        ) { root in
             try await self.client.unstage(at: root, patch: patch)
         }
     }
 
     func discard(_ patch: String, in change: WorkingChange) {
-        mutate("Discarding selected lines in \(change.path)") { root in
+        mutate(
+            "Discarding selected lines in \(change.path)",
+            reloadScope: .workingTree
+        ) { root in
             try await self.client.discard(at: root, patch: patch)
         }
     }
@@ -343,19 +395,22 @@ final class RepositoryStore: ObservableObject {
     func discard(_ entries: [ChangeEntry]) {
         let targets = entries.unstagedSide.map(\.change)
         guard !targets.isEmpty else { return }
-        mutate(Self.operationLabel("Discarding changes in", paths: targets.map(\.path))) { root in
+        mutate(
+            Self.operationLabel("Discarding changes in", paths: targets.map(\.path)),
+            reloadScope: .workingTree
+        ) { root in
             try await self.client.discard(at: root, changes: targets)
         }
     }
 
     func stageAll() {
-        mutate("Staging all changes") { root in
+        mutate("Staging all changes", reloadScope: .workingTree) { root in
             try await self.client.stage(at: root, paths: self.unstagedChanges.map(\.path))
         }
     }
 
     func unstageAll() {
-        mutate("Unstaging all changes") { root in
+        mutate("Unstaging all changes", reloadScope: .workingTree) { root in
             try await self.client.unstage(at: root, paths: self.stagedChanges.map(\.path))
         }
     }
@@ -517,8 +572,14 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    private enum ReloadScope {
+        case full
+        case workingTree
+    }
+
     private func mutate(
         _ label: String,
+        reloadScope: ReloadScope = .full,
         action: @escaping @MainActor (URL) async throws -> Void
     ) {
         guard let root = repositoryURL else { return }
@@ -528,19 +589,22 @@ final class RepositoryStore: ObservableObject {
             } catch {
                 try? await self.reload(
                     root: root,
-                    revision: self.selectedReference?.fullName
+                    revision: self.selectedReference?.fullName,
+                    scope: reloadScope
                 )
                 throw error
             }
             try await self.reload(
                 root: root,
-                revision: self.selectedReference?.fullName
+                revision: self.selectedReference?.fullName,
+                scope: reloadScope
             )
         }
     }
 
     private func startMonitoring(root: URL) {
-        stopMonitoring()
+        stopMonitoring(resetState: false)
+        guard isMonitoringActive else { return }
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
@@ -554,10 +618,23 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
-    private func stopMonitoring() {
+    private func stopMonitoring(resetState: Bool = true) {
         monitorTask?.cancel()
         monitorTask = nil
-        monitoredState = nil
+        if resetState {
+            monitoredState = nil
+        }
+    }
+
+    func setMonitoringActive(_ isActive: Bool) {
+        guard isMonitoringActive != isActive else { return }
+        isMonitoringActive = isActive
+        guard let root = repositoryURL else { return }
+        if isActive {
+            startMonitoring(root: root)
+        } else {
+            stopMonitoring(resetState: false)
+        }
     }
 
     private func refreshIfRepositoryChanged(root: URL) async {
@@ -578,18 +655,35 @@ final class RepositoryStore: ObservableObject {
             isLoading = true
             defer { isLoading = false }
             try await reload(root: root, revision: selectedReference?.fullName)
-            monitoredState = state
         } catch {
             // External Git operations can leave short-lived lock or ref states.
             // The next polling pass retries without interrupting the user.
         }
     }
 
-    private func reload(root: URL, revision: String? = nil) async throws {
+    private func reload(
+        root: URL,
+        revision: String? = nil,
+        scope: ReloadScope = .full
+    ) async throws {
+        switch scope {
+        case .full:
+            try await reloadFull(root: root, revision: revision)
+        case .workingTree:
+            try await reloadWorkingTree(root: root)
+        }
+    }
+
+    private func reloadFull(root: URL, revision: String?) async throws {
         let previousChangeOrder = changeOrder
-        let snapshot = try await client.snapshot(at: root, revision: revision)
+        let load = try await client.snapshotAndStateToken(
+            at: root,
+            revision: revision
+        )
         try Task.checkCancellation()
         guard isCurrentRepository(root) else { return }
+        let snapshot = load.snapshot
+        monitoredState = load.stateToken
         branch = snapshot.branch
         upstream = snapshot.upstream
         pushTarget = snapshot.pushTarget
@@ -623,6 +717,38 @@ final class RepositoryStore: ObservableObject {
         } else {
             reconcileChangeSelection(previousOrder: previousChangeOrder)
         }
+    }
+
+    private func reloadWorkingTree(root: URL) async throws {
+        let previousChangeOrder = changeOrder
+        let snapshot = try await client.workingTreeSnapshot(at: root)
+        try Task.checkCancellation()
+        guard isCurrentRepository(root) else { return }
+        changes = snapshot.changes
+        if let monitoredState {
+            self.monitoredState = monitoredState.replacingWorkingTree(
+                with: snapshot
+            )
+        }
+        guard selectedSection == .changes else { return }
+        reconcileChangeSelection(previousOrder: previousChangeOrder)
+    }
+
+    private func reloadHistory(root: URL, revision: String?) async throws {
+        let loadedCommits = try await client.history(
+            at: root,
+            revision: revision
+        )
+        try Task.checkCancellation()
+        guard isCurrentRepository(root) else { return }
+        commits = loadedCommits
+        if let selectedCommit,
+           let replacement = commits.first(where: { $0.hash == selectedCommit.hash }) {
+            self.selectedCommit = replacement
+        } else {
+            selectedCommit = commits.first
+        }
+        showCommit(selectedCommit)
     }
 
     /// Carries the change selection across a refresh while keeping the primary
@@ -695,6 +821,8 @@ final class RepositoryStore: ObservableObject {
     }
 
     private func prepareForRepositorySwitch() {
+        detailTask?.cancel()
+        detailTask = nil
         loadGeneration += 1
         branch = ""
         upstream = nil
@@ -717,6 +845,9 @@ final class RepositoryStore: ObservableObject {
         amend = false
         branchPendingForceDelete = nil
         isConfirmingPush = false
+        cachedCommitHash = nil
+        cachedCommitDetails = nil
+        cachedVerifiedCommit = nil
     }
 
     private func isCurrentRepository(_ root: URL) -> Bool {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RepositoryView: View {
     @EnvironmentObject private var store: RepositoryStore
+    @Environment(\.controlActiveState) private var controlActiveState
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showingBranchSheet = false
     @State private var showingStashSheet = false
@@ -70,6 +71,12 @@ struct RepositoryView: View {
         }
         .animation(.snappy, value: store.operationLabel)
         .navigationTitle(store.repositoryName)
+        .onAppear {
+            store.setMonitoringActive(controlActiveState == .key)
+        }
+        .onChange(of: controlActiveState) { _, state in
+            store.setMonitoringActive(state == .key)
+        }
     }
 
     private var pushConfirmationMessage: String {

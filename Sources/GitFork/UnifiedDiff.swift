@@ -1,11 +1,11 @@
 import Foundation
 
-enum PartialPatchDirection {
+enum PartialPatchDirection: Sendable {
     case forward
     case reverse
 }
 
-enum UnifiedDiffLineKind: Equatable {
+enum UnifiedDiffLineKind: Equatable, Sendable {
     case metadata
     case hunkHeader
     case context
@@ -18,7 +18,7 @@ enum UnifiedDiffLineKind: Equatable {
     }
 }
 
-struct UnifiedDiffLine: Identifiable, Equatable {
+struct UnifiedDiffLine: Identifiable, Equatable, Sendable {
     let id: Int
     let text: String
     let kind: UnifiedDiffLineKind
@@ -36,27 +36,25 @@ struct UnifiedDiffLine: Identifiable, Equatable {
     }
 }
 
-struct UnifiedDiffHunk: Identifiable, Equatable {
+struct UnifiedDiffHunk: Identifiable, Equatable, Sendable {
     let id: Int
     let header: UnifiedDiffLine
     let lines: [UnifiedDiffLine]
-
-    var selectableLineIDs: Set<Int> {
-        Set(lines.lazy.filter { $0.kind.isSelectableChange }.map(\.id))
-    }
+    let selectableLineIDs: Set<Int>
 }
 
-struct UnifiedDiffFile: Identifiable, Equatable {
+struct UnifiedDiffFile: Identifiable, Equatable, Sendable {
     let id: Int
     let path: String
     let lines: [UnifiedDiffLine]
 }
 
-struct UnifiedDiff {
+struct UnifiedDiff: Sendable {
     let lines: [UnifiedDiffLine]
     let preambleLines: [UnifiedDiffLine]
     let files: [UnifiedDiffFile]
     let displayHunks: [UnifiedDiffHunk]
+    let selectableLineIDs: Set<Int>
     private let hunks: [Hunk]
 
     init(_ text: String) {
@@ -133,6 +131,9 @@ struct UnifiedDiff {
         }
 
         lines = parsedLines
+        selectableLineIDs = Set(
+            parsedLines.lazy.filter { $0.kind.isSelectableChange }.map(\.id)
+        )
         let fileStarts = parsedLines.indices.filter {
             parsedLines[$0].text.hasPrefix("diff --git ")
         }
@@ -153,13 +154,14 @@ struct UnifiedDiff {
             UnifiedDiffHunk(
                 id: hunk.headerIndex,
                 header: parsedLines[hunk.headerIndex],
-                lines: Array(parsedLines[hunk.bodyRange])
+                lines: Array(parsedLines[hunk.bodyRange]),
+                selectableLineIDs: Set(
+                    parsedLines[hunk.bodyRange].lazy
+                        .filter { $0.kind.isSelectableChange }
+                        .map(\.id)
+                )
             )
         }
-    }
-
-    var selectableLineIDs: Set<Int> {
-        Set(lines.lazy.filter { $0.kind.isSelectableChange }.map(\.id))
     }
 
     private static func filePath(in lines: [UnifiedDiffLine]) -> String {
@@ -434,13 +436,13 @@ struct UnifiedDiff {
     }
 }
 
-private struct Hunk {
+private struct Hunk: Sendable {
     let headerIndex: Int
     let bodyRange: Range<Int>
     let range: HunkRange
 }
 
-private struct HunkRange {
+private struct HunkRange: Sendable {
     let oldStart: Int
     let oldCount: Int
     let newStart: Int
@@ -481,7 +483,7 @@ private struct HunkRange {
     }
 }
 
-private struct TransformedHunk {
+private struct TransformedHunk: Sendable {
     let lines: [String]
     let oldCount: Int
     let newCount: Int

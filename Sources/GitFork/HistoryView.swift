@@ -5,6 +5,12 @@ struct HistoryView: View {
 
     var body: some View {
         let commits = store.filteredCommits
+        let graph = store.searchText.isEmpty
+            ? CommitGraphLayout(commits: commits)
+            : CommitGraphLayout(
+                commits: commits,
+                connectingThrough: store.commits
+            )
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -28,10 +34,19 @@ struct HistoryView: View {
                     description: Text(store.searchText.isEmpty ? "This repository has no commits yet." : "No commits match your search.")
                 )
             } else {
-                List(commits, selection: commitSelection) { commit in
-                    CommitRow(commit: commit)
+                List(selection: commitSelection) {
+                    ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
+                        CommitRow(
+                            commit: commit,
+                            graphRow: graph.rows[index],
+                            graphColumnCount: graph.columnCount
+                        )
                         .tag(commit)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 10))
+                        .listRowInsets(
+                            EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 10)
+                        )
+                        .listRowSeparator(.hidden)
+                    }
                 }
                 .listStyle(.inset)
             }
@@ -49,11 +64,14 @@ struct HistoryView: View {
 
 private struct CommitRow: View {
     let commit: GitCommit
+    let graphRow: CommitGraphRow
+    let graphColumnCount: Int
 
     var body: some View {
-        HStack(spacing: 10) {
-            CommitGraphGlyph(isMerge: commit.parents.count > 1)
-                .frame(width: 24, height: 48)
+        HStack(spacing: 8) {
+            Color.clear
+                .frame(width: graphWidth)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
@@ -87,6 +105,13 @@ private struct CommitRow: View {
                         .lineLimit(1)
                     Text("·")
                     Text(commit.date, format: .relative(presentation: .named))
+                    if commit.parents.count > 1 {
+                        Label(
+                            "\(commit.parents.count) parents",
+                            systemImage: "arrow.triangle.merge"
+                        )
+                        .foregroundStyle(GitForkTheme.purple)
+                    }
                     Spacer()
                     Text(commit.shortHash)
                         .font(.caption.monospaced())
@@ -94,7 +119,38 @@ private struct CommitRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+            .padding(.vertical, 7)
         }
+        .overlay(alignment: .leading) {
+            CommitGraph(
+                row: graphRow,
+                columnCount: graphColumnCount
+            )
+            .frame(width: graphWidth)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+        .help(parentDescription)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(parentDescription)
+    }
+
+    private var graphWidth: CGFloat {
+        min(
+            max(28, CGFloat(graphColumnCount - 1) * 14 + 14),
+            140
+        )
+    }
+
+    private var parentDescription: String {
+        guard !commit.parents.isEmpty else {
+            return "Root commit · no parents"
+        }
+        let hashes = commit.parents
+            .map { String($0.prefix(8)) }
+            .joined(separator: ", ")
+        let label = commit.parents.count == 1 ? "Parent" : "Parents"
+        return "\(label): \(hashes)"
     }
 
     private func cleanDecoration(_ value: String) -> String {
@@ -118,41 +174,97 @@ private struct CommitRow: View {
     }
 }
 
-private struct CommitGraphGlyph: View {
-    let isMerge: Bool
+private struct CommitGraph: View {
+    let row: CommitGraphRow
+    let columnCount: Int
+
+    private let colors: [Color] = [
+        GitForkTheme.accent,
+        GitForkTheme.purple,
+        GitForkTheme.green,
+        GitForkTheme.orange,
+        Color(red: 0.20, green: 0.68, blue: 0.66),
+        Color(red: 0.90, green: 0.42, blue: 0.68),
+        Color(red: 0.42, green: 0.48, blue: 0.90),
+        Color(red: 0.89, green: 0.68, blue: 0.24)
+    ]
 
     var body: some View {
         Canvas { context, size in
-            let centerX = size.width / 2
-            let midY = size.height / 2
-            let nodeColor = isMerge ? GitForkTheme.purple : GitForkTheme.accent
+            for segment in row.segments {
+                let start = point(for: segment.start, in: size)
+                let end = point(for: segment.end, in: size)
+                var path = Path()
+                path.move(to: start)
 
-            var main = Path()
-            main.move(to: CGPoint(x: centerX, y: 0))
-            main.addLine(to: CGPoint(x: centerX, y: size.height))
-            context.stroke(main, with: .color(GitForkTheme.accent.opacity(0.35)), lineWidth: 2)
+                if start.x == end.x {
+                    path.addLine(to: end)
+                } else {
+                    let middleY = (start.y + end.y) / 2
+                    path.addCurve(
+                        to: end,
+                        control1: CGPoint(x: start.x, y: middleY),
+                        control2: CGPoint(x: end.x, y: middleY)
+                    )
+                }
 
-            if isMerge {
-                var branch = Path()
-                branch.move(to: CGPoint(x: centerX, y: midY))
-                branch.addCurve(
-                    to: CGPoint(x: size.width, y: 0),
-                    control1: CGPoint(x: size.width, y: midY),
-                    control2: CGPoint(x: size.width, y: size.height * 0.16)
+                context.stroke(
+                    path,
+                    with: .color(color(segment.color).opacity(0.82)),
+                    style: StrokeStyle(
+                        lineWidth: 2,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
                 )
-                context.stroke(branch, with: .color(GitForkTheme.purple.opacity(0.5)), lineWidth: 2)
             }
 
-            // Soft halo separates the node from the line regardless of background.
-            let halo = Path(
-                ellipseIn: CGRect(x: centerX - 7, y: midY - 7, width: 14, height: 14)
+            let nodePoint = point(
+                for: .node(row.nodeColumn),
+                in: size
             )
-            context.fill(halo, with: .color(nodeColor.opacity(0.16)))
-
             let node = Path(
-                ellipseIn: CGRect(x: centerX - 4.5, y: midY - 4.5, width: 9, height: 9)
+                ellipseIn: CGRect(
+                    x: nodePoint.x - 5,
+                    y: nodePoint.y - 5,
+                    width: 10,
+                    height: 10
+                )
             )
-            context.fill(node, with: .color(nodeColor))
+            context.fill(node, with: .color(color(row.nodeColor)))
+            context.stroke(
+                node,
+                with: .color(.white.opacity(0.72)),
+                lineWidth: 1
+            )
         }
+    }
+
+    private func point(
+        for anchor: CommitGraphAnchor,
+        in size: CGSize
+    ) -> CGPoint {
+        let horizontalInset: CGFloat = 7
+        let availableWidth = max(0, size.width - horizontalInset * 2)
+        let spacing = columnCount > 1
+            ? availableWidth / CGFloat(columnCount - 1)
+            : 0
+        let x = columnCount > 1
+            ? horizontalInset + CGFloat(anchor.column) * spacing
+            : size.width / 2
+        let y: CGFloat
+        switch anchor {
+        case .top:
+            y = 0
+        case .node:
+            y = size.height / 2
+        case .bottom:
+            y = size.height
+        }
+        return CGPoint(x: x, y: y)
+    }
+
+    private func color(_ index: Int) -> Color {
+        colors[index % colors.count]
     }
 }

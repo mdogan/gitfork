@@ -258,6 +258,7 @@ struct GitClient: Sendable {
     static func historyArguments(revision: String?) -> [String] {
         [
             "log",
+            "--topo-order",
             "--max-count=300",
             "--date=iso-strict",
             "--pretty=format:\(unverifiedCommitFormat)",

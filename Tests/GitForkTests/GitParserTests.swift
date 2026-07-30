@@ -903,6 +903,7 @@ struct GitParserTests {
 
         #expect(allHistory.last == "--all")
         #expect(branchHistory.last == "refs/heads/main")
+        #expect(allHistory.contains("--topo-order"))
         #expect(!allHistory.joined().contains("%G?"))
         #expect(!allHistory.joined().contains("%GK"))
         #expect(!allHistory.joined().contains("%GS"))

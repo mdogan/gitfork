@@ -110,7 +110,7 @@ struct ChangeSelectionTests {
     }
 
     @Test
-    func refreshMovesSelectedFilesToTheSideTheyNowLiveOn() {
+    func refreshFollowsMovedFileWhenOriginalSectionBecomesEmpty() {
         var selection = ChangeSelectionModel()
         selection.select(order[3])
         selection.toggle(order[4], in: order)
@@ -118,7 +118,7 @@ struct ChangeSelectionTests {
         // c.swift was staged and d.swift was discarded.
         let staged = ChangeEntryID(path: "c.swift", staged: true)
         let refreshed = [staged]
-        selection.reconcile(order: refreshed) { id in
+        selection.reconcile(previousOrder: order, order: refreshed) { id in
             switch id.path {
             case "c.swift": staged
             default: nil
@@ -131,6 +131,43 @@ struct ChangeSelectionTests {
     }
 
     @Test
+    func refreshKeepsPrimaryInItsOriginalSectionWhileRowsRemain() {
+        let stagedA = ChangeEntryID(path: "a.swift", staged: true)
+        let stagedB = ChangeEntryID(path: "b.swift", staged: true)
+        let stagedC = ChangeEntryID(path: "c.swift", staged: true)
+        let unstagedD = ChangeEntryID(path: "d.swift", staged: false)
+        let previous = [stagedA, stagedB, stagedC, unstagedD]
+        var selection = ChangeSelectionModel()
+        selection.select(stagedB)
+
+        let movedB = ChangeEntryID(path: "b.swift", staged: false)
+        let refreshed = [stagedA, stagedC, movedB, unstagedD]
+        selection.reconcile(previousOrder: previous, order: refreshed) { id in
+            id == stagedB ? movedB : id
+        }
+
+        #expect(selection.selected == [stagedC])
+        #expect(selection.primary == stagedC)
+        #expect(selection.anchor == stagedC)
+    }
+
+    @Test
+    func refreshFallsBackToPreviousRowAtTheEndOfASection() {
+        var selection = ChangeSelectionModel()
+        selection.select(order[4])
+
+        let movedD = ChangeEntryID(path: "d.swift", staged: true)
+        let refreshed = [order[0], order[1], movedD, order[2], order[3]]
+        selection.reconcile(previousOrder: order, order: refreshed) { id in
+            id == order[4] ? movedD : id
+        }
+
+        #expect(selection.selected == [order[3]])
+        #expect(selection.primary == order[3])
+        #expect(selection.anchor == order[3])
+    }
+
+    @Test
     func refreshKeepsUnaffectedRowsAndDropsVanishedOnes() {
         var selection = ChangeSelectionModel()
         selection.select(order[2])
@@ -139,7 +176,7 @@ struct ChangeSelectionTests {
 
         // Only d.swift still has changes; the primary row is gone.
         let refreshed = [order[4]]
-        selection.reconcile(order: refreshed) { id in
+        selection.reconcile(previousOrder: order, order: refreshed) { id in
             id.path == "d.swift" ? id : nil
         }
 
@@ -153,7 +190,7 @@ struct ChangeSelectionTests {
         selection.select(order[0])
         selection.extend(to: order[2], in: order)
 
-        selection.reconcile(order: []) { _ in nil }
+        selection.reconcile(previousOrder: order, order: []) { _ in nil }
 
         #expect(selection.isEmpty)
         #expect(selection.primary == nil)

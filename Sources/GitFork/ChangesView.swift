@@ -14,7 +14,7 @@ struct ChangesView: View {
                     Text("Working Tree")
                         .font(.headline)
                     Text(changeCountLabel)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
@@ -49,7 +49,7 @@ struct ChangesView: View {
                     Label("Stash Changes", systemImage: "archivebox")
                 }
                 .menuStyle(.borderedButton)
-                .controlSize(.small)
+                .controlSize(.regular)
                 .help("Choose which changes to save to a stash")
                 .disabled(store.changes.isEmpty || store.isLoading)
 
@@ -62,7 +62,7 @@ struct ChangesView: View {
                     )
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .controlSize(.regular)
                 .keyboardShortcut(.return, modifiers: .command)
                 .help("Write a commit message for the staged changes")
                 .disabled(store.isLoading)
@@ -97,7 +97,9 @@ struct ChangesView: View {
 
 private struct ChangeList: View {
     @EnvironmentObject private var store: RepositoryStore
+    @Environment(\.openWindow) private var openWindow
     @State private var pendingDiscard: [ChangeEntry] = []
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -118,7 +120,8 @@ private struct ChangeList: View {
                             ForEach(stagedEntries) { entry in
                                 ChangeRow(
                                     entry: entry,
-                                    requestDiscard: requestDiscard
+                                    requestDiscard: requestDiscard,
+                                    focusList: focusList
                                 )
                                 .tag(entry.id)
                             }
@@ -141,7 +144,8 @@ private struct ChangeList: View {
                             ForEach(unstagedEntries) { entry in
                                 ChangeRow(
                                     entry: entry,
-                                    requestDiscard: requestDiscard
+                                    requestDiscard: requestDiscard,
+                                    focusList: focusList
                                 )
                                 .tag(entry.id)
                             }
@@ -159,9 +163,13 @@ private struct ChangeList: View {
                 }
             }
             .listStyle(.inset)
-            .environment(\.defaultMinListRowHeight, 26)
+            .environment(\.defaultMinListRowHeight, 30)
+            .focused($isListFocused)
             .onKeyPress(.return) {
                 performKeyboardAction(for: .returnKey)
+            }
+            .onKeyPress(.space) {
+                openSideBySideDiff()
             }
             .onDeleteCommand {
                 _ = performKeyboardAction(for: .deleteKey)
@@ -216,6 +224,28 @@ private struct ChangeList: View {
         pendingDiscard = targets
     }
 
+    private func focusList() {
+        isListFocused = true
+    }
+
+    private func openSideBySideDiff() -> KeyPress.Result {
+        guard let repositoryURL = store.repositoryURL,
+              let change = store.selectedChange,
+              !store.diff.isEmpty else {
+            return .ignored
+        }
+        openWindow(
+            id: GitForkApp.sideBySideDiffWindowID,
+            value: SideBySideDiffWindowState(
+                repositoryURL: repositoryURL,
+                change: change,
+                staged: store.selectedChangeIsStaged,
+                diff: store.diff
+            )
+        )
+        return .handled
+    }
+
     private func performKeyboardAction(
         for key: ChangeSelectionKey
     ) -> KeyPress.Result {
@@ -258,7 +288,7 @@ private struct SelectionActionBar: View {
                     Label("Stage", systemImage: "plus")
                 }
                 .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-                .font(.caption)
+                .font(.callout)
                 .help("Stage \(ChangeActionTitle.fileCount(entries.unstagedSide.count))")
                 .disabled(store.isLoading)
             }
@@ -270,7 +300,7 @@ private struct SelectionActionBar: View {
                     Label("Unstage", systemImage: "minus")
                 }
                 .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-                .font(.caption)
+                .font(.callout)
                 .help("Unstage \(ChangeActionTitle.fileCount(entries.stagedSide.count))")
                 .disabled(store.isLoading)
             }
@@ -282,7 +312,7 @@ private struct SelectionActionBar: View {
                     Label("Discard…", systemImage: "trash")
                 }
                 .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(GitForkTheme.red)
                 .help(
                     "Permanently discard the working-tree changes in "
@@ -316,21 +346,21 @@ private struct ChangeSectionHeader: View {
     let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 7) {
             Image(systemName: systemImage)
-                .font(.caption)
+                .font(.body)
                 .foregroundStyle(tint)
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.body.weight(.semibold))
             Text("\(count)")
-                .font(.caption2.monospacedDigit().weight(.semibold))
+                .font(.callout.monospacedDigit().weight(.semibold))
                 .foregroundStyle(tint)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
                 .background(tint.opacity(0.13), in: Capsule())
             Spacer()
             Button(actionTitle, action: action)
-                .font(.caption2)
+                .font(.callout.weight(.semibold))
                 .textCase(nil)
                 .buttonStyle(GitForkHoverButtonStyle(.text))
                 .foregroundStyle(tint)
@@ -338,11 +368,11 @@ private struct ChangeSectionHeader: View {
                 .disabled(count == 0)
         }
         .textCase(nil)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: 9)
                 .strokeBorder(tint.opacity(0.18))
         }
     }
@@ -365,6 +395,7 @@ private struct ChangeRow: View {
     @EnvironmentObject private var store: RepositoryStore
     let entry: ChangeEntry
     let requestDiscard: ([ChangeEntry]) -> Void
+    let focusList: () -> Void
 
     private var change: WorkingChange { entry.change }
     private var staged: Bool { entry.staged }
@@ -381,13 +412,13 @@ private struct ChangeRow: View {
         Button(action: handleClick) {
             HStack(spacing: 7) {
                 Text(statusSymbol)
-                    .font(.caption2.monospaced().weight(.bold))
+                    .font(.callout.monospaced().weight(.bold))
                     .foregroundStyle(Color.statusColor(statusSymbol))
-                    .frame(width: 18, height: 18)
-                    .background(Color.statusColor(statusSymbol).opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                    .frame(width: 22, height: 22)
+                    .background(Color.statusColor(statusSymbol).opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
 
                 Text(change.path)
-                    .font(.callout)
+                    .font(.body)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .layoutPriority(1)
@@ -398,7 +429,8 @@ private struct ChangeRow: View {
                     staged ? store.unstage(change) : store.stage(change)
                 } label: {
                     Image(systemName: staged ? "minus" : "plus")
-                        .frame(width: 16, height: 16)
+                        .font(.body.weight(.medium))
+                        .frame(width: 20, height: 20)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(GitForkHoverButtonStyle(.icon))
@@ -410,6 +442,7 @@ private struct ChangeRow: View {
         .buttonStyle(GitForkHoverButtonStyle(.compactRow(isSelected: isSelected)))
         .help(
             "View \(staged ? "staged" : "working tree") diff for \(change.path)"
+                + " · Space for side by side"
                 + " · Shift-click for a range, Command-click to add or remove"
         )
         .contextMenu {
@@ -430,6 +463,9 @@ private struct ChangeRow: View {
         } else {
             store.selectChange(change, staged: staged)
         }
+        // The full-row button otherwise keeps keyboard focus, preventing the
+        // enclosing List from handling arrows, Return, Space, and Delete.
+        focusList()
     }
 }
 

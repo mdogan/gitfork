@@ -124,28 +124,76 @@ struct ChangeSelectionModel: Equatable, Sendable {
         anchor = pivot
     }
 
-    /// Rebuilds the selection after a repository refresh. `survivor` maps a
-    /// selected row to the row that now represents the same file — a staged
-    /// file moves to the other side instead of losing its selection — or to
-    /// `nil` once the file has no changes left.
+    /// Rebuilds the selection after a repository refresh. When the primary row
+    /// leaves its section, selection stays at the same relative position in
+    /// that section while any rows remain. It follows the file to its new side
+    /// only when the original section becomes empty.
     mutating func reconcile(
+        previousOrder: [ChangeEntryID],
         order: [ChangeEntryID],
         survivor: (ChangeEntryID) -> ChangeEntryID?
     ) {
+        let previousSelected = selected
+        let previousPrimary = primary
+        let previousAnchor = anchor
         let live = Set(order)
-        selected = Set(selected.compactMap(survivor).filter(live.contains))
-        primary = surviving(primary, survivor: survivor)
-            ?? order.first(where: selected.contains)
-        anchor = surviving(anchor, survivor: survivor) ?? primary
+
+        func reconciled(_ id: ChangeEntryID) -> ChangeEntryID? {
+            guard let candidate = survivor(id), live.contains(candidate) else {
+                return nil
+            }
+            let originalSectionStillHasRows = order.contains {
+                $0.staged == id.staged
+            }
+            if candidate.staged != id.staged,
+               originalSectionStillHasRows {
+                return nil
+            }
+            return candidate
+        }
+
+        selected = Set(previousSelected.compactMap(reconciled))
+
+        if let previousPrimary,
+           let survivingPrimary = reconciled(previousPrimary),
+           selected.contains(survivingPrimary) {
+            primary = survivingPrimary
+        } else if let previousPrimary,
+                  let replacement = replacement(
+                      for: previousPrimary,
+                      previousOrder: previousOrder,
+                      order: order
+                  ) {
+            selected.insert(replacement)
+            primary = replacement
+        } else {
+            primary = order.first(where: selected.contains)
+        }
+
+        if let previousAnchor,
+           let survivingAnchor = reconciled(previousAnchor),
+           selected.contains(survivingAnchor) {
+            anchor = survivingAnchor
+        } else {
+            anchor = primary
+        }
     }
 
-    private func surviving(
-        _ id: ChangeEntryID?,
-        survivor: (ChangeEntryID) -> ChangeEntryID?
+    private func replacement(
+        for id: ChangeEntryID,
+        previousOrder: [ChangeEntryID],
+        order: [ChangeEntryID]
     ) -> ChangeEntryID? {
-        guard let id, let candidate = survivor(id), selected.contains(candidate) else {
+        let previousSection = previousOrder.filter {
+            $0.staged == id.staged
+        }
+        let currentSection = order.filter {
+            $0.staged == id.staged
+        }
+        guard !currentSection.isEmpty else {
             return nil
         }
-        return candidate
+        let previousIndex = previousSection.firstIndex(of: id) ?? 0
+        return currentSection[min(previousIndex, currentSection.count - 1)]
     }
 }

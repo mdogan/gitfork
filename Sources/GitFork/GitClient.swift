@@ -161,8 +161,16 @@ struct GitClient: Sendable {
         )
     }
 
-    func diff(at root: URL, change: WorkingChange, staged: Bool) async throws -> String {
+    func diff(
+        at root: URL,
+        change: WorkingChange,
+        staged: Bool,
+        fullFile: Bool = false
+    ) async throws -> String {
         var arguments = ["diff", "--no-ext-diff", "--no-color"]
+        if fullFile {
+            arguments.append("--unified=\(Int32.max)")
+        }
         if staged {
             arguments.append("--cached")
         }
@@ -175,6 +183,7 @@ struct GitClient: Sendable {
                 "--no-index",
                 "--no-ext-diff",
                 "--no-color",
+                fullFile ? "--unified=\(Int32.max)" : "--unified=3",
                 "--",
                 "/dev/null",
                 change.path

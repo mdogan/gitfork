@@ -122,6 +122,14 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func openExternalURL(_ url: URL) {
+        guard let path = GitForkExternalURL.repositoryPath(from: url) else {
+            errorMessage = "GitFork received an invalid repository URL."
+            return
+        }
+        openRepository(URL(fileURLWithPath: path, isDirectory: true))
+    }
+
     func refresh() {
         guard let root = repositoryURL else { return }
         _ = startOperation("Refreshing") {
@@ -578,6 +586,7 @@ final class RepositoryStore: ObservableObject {
     }
 
     private func reload(root: URL, revision: String? = nil) async throws {
+        let previousChangeOrder = changeOrder
         let snapshot = try await client.snapshot(at: root, revision: revision)
         try Task.checkCancellation()
         guard isCurrentRepository(root) else { return }
@@ -612,15 +621,17 @@ final class RepositoryStore: ObservableObject {
         if selectedSection == .history {
             showCommit(selectedCommit)
         } else {
-            reconcileChangeSelection()
+            reconcileChangeSelection(previousOrder: previousChangeOrder)
         }
     }
 
-    /// Carries the change selection across a refresh. Rows whose file moved
-    /// between the index and the working tree follow the file to its new side;
-    /// rows whose file no longer has changes drop out.
-    private func reconcileChangeSelection() {
-        changeSelection.reconcile(order: changeOrder) { id in
+    /// Carries the change selection across a refresh while keeping the primary
+    /// row in its original section for as long as that section has rows.
+    private func reconcileChangeSelection(previousOrder: [ChangeEntryID]) {
+        changeSelection.reconcile(
+            previousOrder: previousOrder,
+            order: changeOrder
+        ) { id in
             guard let change = self.changes.first(where: { $0.path == id.path }) else {
                 return nil
             }

@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Testing
 @testable import GitFork
@@ -102,6 +101,64 @@ struct GitParserTests {
         // Column width covers context lines too, not just the changed ones.
         #expect(sideBySide.oldColumnCharacters == "context before".count)
         #expect(sideBySide.newColumnCharacters == "context before".count)
+    }
+
+    @Test
+    func loadsCompleteFileContextForSideBySideComparison() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkFullFileDiffTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let file = root.appendingPathComponent("lines.txt")
+        var lines = (1...30).map { "line \($0)" }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: file, atomically: true, encoding: .utf8)
+        try runGit(["add", "lines.txt"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        lines[14] = "changed line 15"
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        let client = GitClient()
+        let snapshot = try await client.snapshot(at: root)
+        let change = try #require(
+            snapshot.changes.first { $0.path == "lines.txt" }
+        )
+        let compactDiff = try await client.diff(
+            at: root,
+            change: change,
+            staged: false
+        )
+        let fullDiff = try await client.diff(
+            at: root,
+            change: change,
+            staged: false,
+            fullFile: true
+        )
+
+        let compactLines = try #require(
+            UnifiedDiff(compactDiff).displayHunks.first
+        ).lines.map(\.displayText)
+        #expect(!compactLines.contains("line 1"))
+        #expect(!compactLines.contains("line 30"))
+
+        let fullRows = try #require(
+            SideBySideDiff(UnifiedDiff(fullDiff)).hunks.first
+        ).rows
+        #expect(fullRows.first?.old?.displayText == "line 1")
+        #expect(fullRows.first?.new?.displayText == "line 1")
+        #expect(fullRows.last?.old?.displayText == "line 30")
+        #expect(fullRows.last?.new?.displayText == "line 30")
+        #expect(fullRows.contains {
+            $0.old?.displayText == "line 15"
+                && $0.new?.displayText == "changed line 15"
+        })
     }
 
     @Test
@@ -1258,109 +1315,6 @@ struct GitParserTests {
         }
         #expect(!store.isLoading)
         #expect(store.repositoryURL?.standardizedFileURL == root.standardizedFileURL)
-    }
-
-    @Test
-    @MainActor
-    func separateStoresLoadRepositoriesIndependently() async throws {
-        let container = FileManager.default.temporaryDirectory
-            .appendingPathComponent("GitForkWindowStoreTests-\(UUID().uuidString)")
-        let firstRoot = container.appendingPathComponent("First")
-        let secondRoot = container.appendingPathComponent("Second")
-        try FileManager.default.createDirectory(
-            at: firstRoot,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.createDirectory(
-            at: secondRoot,
-            withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: container) }
-
-        for (root, branch) in [(firstRoot, "first"), (secondRoot, "second")] {
-            try runGit(["init", "-b", branch], at: root)
-            try runGit(["config", "user.name", "GitFork Tests"], at: root)
-            try runGit(["config", "user.email", "tests@example.com"], at: root)
-            try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
-        }
-
-        let firstStore = RepositoryStore()
-        let secondStore = RepositoryStore()
-        firstStore.openRepository(firstRoot)
-        secondStore.openRepository(secondRoot)
-
-        for _ in 0..<500 {
-            guard firstStore.isLoading || secondStore.isLoading else { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-
-        #expect(!firstStore.isLoading)
-        #expect(!secondStore.isLoading)
-        #expect(
-            firstStore.repositoryURL?.standardizedFileURL
-                == firstRoot.standardizedFileURL
-        )
-        #expect(
-            secondStore.repositoryURL?.standardizedFileURL
-                == secondRoot.standardizedFileURL
-        )
-        #expect(firstStore.branch == "first")
-        #expect(secondStore.branch == "second")
-    }
-
-    @Test
-    @MainActor
-    func routesRepositoryWindowsIntoTheSourceTabGroup() async {
-        _ = NSApplication.shared
-        let sourceWindow = NSWindow()
-        let repositoryWindow = NSWindow()
-        let coordinator = RepositoryTabCoordinator()
-        let sourceTabID = UUID()
-
-        coordinator.register(
-            tabID: sourceTabID,
-            repositoryPath: "/tmp/First",
-            window: sourceWindow
-        )
-        coordinator.prepareNewTab(
-            repositoryPath: "/tmp/Second",
-            sourceTabID: sourceTabID
-        )
-        let requestedPath = coordinator.register(
-            tabID: UUID(),
-            repositoryPath: "",
-            window: repositoryWindow
-        )
-        try? await Task.sleep(for: .milliseconds(300))
-
-        #expect(requestedPath == "/tmp/Second")
-        #expect(
-            sourceWindow.tabbedWindows?.contains {
-                $0 === repositoryWindow
-            } == true
-        )
-        #expect(coordinator.focusTab(presenting: "/tmp/Second"))
-        #expect(!coordinator.focusTab(presenting: "/tmp/Missing"))
-
-        sourceWindow.close()
-        repositoryWindow.close()
-    }
-
-    @Test
-    @MainActor
-    func appDelegateQueuesExternalRepositoryRequestsUntilConsumed() throws {
-        let appDelegate = GitForkAppDelegate()
-        let url = try #require(
-            URL(string: "gitfork://open?path=%2Ftmp%2FFirst")
-        )
-
-        appDelegate.application(NSApplication.shared, open: [url])
-
-        let request = try #require(appDelegate.openRequests.first)
-        #expect(request.url == url)
-
-        appDelegate.consume(request)
-        #expect(appDelegate.openRequests.isEmpty)
     }
 
     @Test

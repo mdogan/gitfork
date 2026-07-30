@@ -1,39 +1,113 @@
 import AppKit
 import SwiftUI
 
-/// How a working-tree diff is laid out: as one column of interleaved changes or
-/// as the two versions of the file next to each other.
-enum DiffPresentation: String, CaseIterable, Identifiable {
-    case unified
-    case sideBySide
+struct SideBySideDiffWindowState: Codable, Hashable {
+    let id: UUID
+    let repositoryPath: String
+    let path: String
+    let originalPath: String?
+    let indexStatus: String
+    let workTreeStatus: String
+    let status: String
+    let statusSymbol: String
+    let staged: Bool
+    let diff: String
+
+    init(
+        repositoryURL: URL,
+        change: WorkingChange,
+        staged: Bool,
+        diff: String
+    ) {
+        id = UUID()
+        repositoryPath = repositoryURL.standardizedFileURL.path
+        path = change.path
+        originalPath = change.originalPath
+        indexStatus = String(change.indexStatus)
+        workTreeStatus = String(change.workTreeStatus)
+        status = change.displayStatus(staged: staged)
+        statusSymbol = change.statusSymbol(staged: staged)
+        self.staged = staged
+        self.diff = diff
+    }
+
+    var repositoryURL: URL {
+        URL(fileURLWithPath: repositoryPath, isDirectory: true)
+    }
+
+    var change: WorkingChange {
+        WorkingChange(
+            path: path,
+            originalPath: originalPath,
+            indexStatus: indexStatus.first ?? " ",
+            workTreeStatus: workTreeStatus.first ?? " "
+        )
+    }
+}
+
+private enum SideBySideDiffScope: String, CaseIterable, Identifiable {
+    case diffOnly
+    case fullFile
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .unified: "Unified"
-        case .sideBySide: "Side by Side"
+        case .diffOnly: "Diff Only"
+        case .fullFile: "Full File"
         }
     }
+}
 
-    var systemImage: String {
-        switch self {
-        case .unified: "rectangle"
-        case .sideBySide: "rectangle.split.2x1"
-        }
+@MainActor
+private final class SideBySideDiffWindowStore: ObservableObject {
+    let state: SideBySideDiffWindowState
+    @Published private(set) var scope = SideBySideDiffScope.diffOnly
+    @Published private(set) var fullFileDiff: String?
+    @Published private(set) var isLoadingFullFile = false
+    @Published var errorMessage: String?
+
+    private let client = GitClient()
+
+    init(state: SideBySideDiffWindowState) {
+        self.state = state
     }
 
-    var help: String {
-        switch self {
-        case .unified: "Show one column of interleaved changes"
-        case .sideBySide: "Compare the two versions of the file side by side"
+    var displayedDiff: String {
+        scope == .fullFile ? fullFileDiff ?? "" : state.diff
+    }
+
+    func selectScope(_ scope: SideBySideDiffScope) {
+        self.scope = scope
+        guard scope == .fullFile, fullFileDiff == nil, !isLoadingFullFile else {
+            return
+        }
+
+        isLoadingFullFile = true
+        Task {
+            do {
+                let diff = try await client.diff(
+                    at: state.repositoryURL,
+                    change: state.change,
+                    staged: state.staged,
+                    fullFile: true
+                )
+                try Task.checkCancellation()
+                fullFileDiff = diff
+                isLoadingFullFile = false
+            } catch is CancellationError {
+                isLoadingFullFile = false
+            } catch {
+                isLoadingFullFile = false
+                self.scope = .diffOnly
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
 
 struct DetailView: View {
     @EnvironmentObject private var store: RepositoryStore
-    @AppStorage("changeDiffPresentation") private var presentation = DiffPresentation.unified
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,15 +118,13 @@ struct DetailView: View {
             } else if let change = store.selectedChange, store.selectedSection == .changes {
                 ChangeHeader(
                     change: change,
-                    staged: store.selectedChangeIsStaged,
-                    presentation: $presentation
+                    staged: store.selectedChangeIsStaged
                 )
                 Divider()
                 DiffTextView(
                     text: store.diff,
                     change: change,
-                    staged: store.selectedChangeIsStaged,
-                    presentation: presentation
+                    staged: store.selectedChangeIsStaged
                 )
             } else {
                 ContentUnavailableView(
@@ -128,9 +200,9 @@ private struct HeaderBackground: View {
 
 private struct ChangeHeader: View {
     @EnvironmentObject private var store: RepositoryStore
+    @Environment(\.openWindow) private var openWindow
     let change: WorkingChange
     let staged: Bool
-    @Binding var presentation: DiffPresentation
     @State private var isConfirmingFileDiscard = false
 
     var body: some View {
@@ -153,18 +225,24 @@ private struct ChangeHeader: View {
 
             Spacer()
 
-            Picker("Diff Layout", selection: $presentation) {
-                ForEach(DiffPresentation.allCases) { layout in
-                    Image(systemName: layout.systemImage)
-                        .help(layout.help)
-                        .tag(layout)
+            Button {
+                if let repositoryURL = store.repositoryURL {
+                    openWindow(
+                        id: GitForkApp.sideBySideDiffWindowID,
+                        value: SideBySideDiffWindowState(
+                            repositoryURL: repositoryURL,
+                            change: change,
+                            staged: staged,
+                            diff: store.diff
+                        )
+                    )
                 }
+            } label: {
+                Label("Side by Side", systemImage: "rectangle.split.2x1")
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
-            .help("Switch between a unified diff and a side-by-side comparison")
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+            .help("Open a side-by-side comparison in a new window")
+            .disabled(store.repositoryURL == nil || store.diff.isEmpty)
 
             Button {
                 staged ? store.unstage(change) : store.stage(change)
@@ -230,7 +308,6 @@ private struct DiffTextView: View {
     let text: String
     var change: WorkingChange?
     var staged = false
-    var presentation = DiffPresentation.unified
 
     @State private var selectedDisplayLineIDs: Set<Int> = []
     @State private var selectedHunkID: Int?
@@ -238,10 +315,6 @@ private struct DiffTextView: View {
 
     private var document: UnifiedDiff {
         UnifiedDiff(text)
-    }
-
-    private var sideBySideDocument: SideBySideDiff {
-        SideBySideDiff(document)
     }
 
     var body: some View {
@@ -258,17 +331,7 @@ private struct DiffTextView: View {
                 GeometryReader { viewport in
                     ScrollView([.horizontal, .vertical]) {
                         Group {
-                            if change != nil, presentation == .sideBySide, !sideBySideDocument.isEmpty {
-                                SideBySideDiffView(
-                                    diff: sideBySideDocument,
-                                    availableWidth: viewport.size.width,
-                                    staged: staged,
-                                    isLoading: store.isLoading,
-                                    apply: apply,
-                                    discard: requestDiscard
-                                )
-                                .padding(.vertical, 8)
-                            } else if change != nil, !document.displayHunks.isEmpty {
+                            if change != nil, !document.displayHunks.isEmpty {
                                 LazyVStack(alignment: .leading, spacing: 0) {
                                     ForEach(document.displayHunks) { hunk in
                                         DiffHunkView(
@@ -331,9 +394,6 @@ private struct DiffTextView: View {
             }
         }
         .onChange(of: text) {
-            clearSelection()
-        }
-        .onChange(of: presentation) {
             clearSelection()
         }
         .alert(
@@ -410,6 +470,129 @@ private struct DiffTextView: View {
     private var discardMessage: String {
         guard let change else { return "" }
         return "The selected working-tree changes in \(change.path) will be permanently discarded. This cannot be undone."
+    }
+}
+
+struct SideBySideDiffWindow: View {
+    @Environment(\.dismissWindow) private var dismissWindow
+    @StateObject private var model: SideBySideDiffWindowStore
+
+    init(state: SideBySideDiffWindowState) {
+        _model = StateObject(
+            wrappedValue: SideBySideDiffWindowStore(state: state)
+        )
+    }
+
+    private var document: SideBySideDiff {
+        SideBySideDiff(UnifiedDiff(model.displayedDiff))
+    }
+
+    private var windowTitle: String {
+        "\(URL(fileURLWithPath: model.state.path).lastPathComponent) — Side by Side"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text(model.state.statusSymbol)
+                    .font(.headline.monospaced())
+                    .foregroundStyle(Color.statusColor(model.state.statusSymbol))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Color.statusColor(model.state.statusSymbol).opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 7)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.state.path)
+                        .font(.headline)
+                        .textSelection(.enabled)
+                    Text(
+                        "\(model.state.status) · \(model.state.staged ? "Staged" : "Working tree")"
+                    )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Picker(
+                    "Comparison Scope",
+                    selection: Binding(
+                        get: { model.scope },
+                        set: model.selectScope
+                    )
+                ) {
+                    ForEach(SideBySideDiffScope.allCases) { scope in
+                        Text(scope.title)
+                            .tag(scope)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Show only changed regions or the complete contents of both files")
+            }
+            .padding(14)
+            .background(HeaderBackground())
+
+            Divider()
+
+            if model.isLoadingFullFile {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Loading full file contents…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if document.isEmpty {
+                ContentUnavailableView(
+                    "No Side-by-Side Changes",
+                    systemImage: "rectangle.split.2x1",
+                    description: Text("This diff has no comparable changed lines.")
+                )
+            } else {
+                GeometryReader { viewport in
+                    ScrollView([.horizontal, .vertical]) {
+                        SideBySideDiffView(
+                            diff: document,
+                            availableWidth: viewport.size.width,
+                            staged: model.state.staged
+                        )
+                        .padding(.vertical, 8)
+                        .frame(
+                            minWidth: viewport.size.width,
+                            minHeight: viewport.size.height,
+                            alignment: .topLeading
+                        )
+                    }
+                    .background(Color(nsColor: .textBackgroundColor))
+                }
+            }
+        }
+        .frame(minWidth: 760, minHeight: 480)
+        .navigationTitle(windowTitle)
+        .tint(GitForkTheme.accent)
+        .onExitCommand {
+            dismissWindow(
+                id: GitForkApp.sideBySideDiffWindowID,
+                value: model.state
+            )
+        }
+        .alert(
+            "Unable to Load Full File",
+            isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                model.errorMessage = nil
+            }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
     }
 }
 
@@ -681,16 +864,11 @@ private struct DiffHunkView: View {
     }
 }
 
-/// The two versions of a file laid out in aligned columns. Read-only apart from
-/// whole-hunk staging, which keeps the drag-to-select gestures of the unified
-/// view from competing with text selection here.
+/// The two versions of a file laid out in aligned, read-only columns.
 private struct SideBySideDiffView: View {
     let diff: SideBySideDiff
     let availableWidth: CGFloat
     let staged: Bool
-    let isLoading: Bool
-    let apply: (Set<Int>) -> Void
-    let discard: (Set<Int>) -> Void
 
     private var oldColumnWidth: CGFloat {
         columnWidth(for: diff.oldColumnCharacters)
@@ -716,11 +894,7 @@ private struct SideBySideDiffView: View {
                     SideBySideHunkView(
                         hunk: hunk,
                         oldColumnWidth: oldColumnWidth,
-                        newColumnWidth: newColumnWidth,
-                        staged: staged,
-                        isLoading: isLoading,
-                        apply: apply,
-                        discard: discard
+                        newColumnWidth: newColumnWidth
                     )
                 }
             } header: {
@@ -777,12 +951,6 @@ private struct SideBySideHunkView: View {
     let hunk: SideBySideDiffHunk
     let oldColumnWidth: CGFloat
     let newColumnWidth: CGFloat
-    let staged: Bool
-    let isLoading: Bool
-    let apply: (Set<Int>) -> Void
-    let discard: (Set<Int>) -> Void
-
-    @State private var isHovering = false
 
     private var totalWidth: CGFloat {
         oldColumnWidth + DiffLayout.dividerWidth + newColumnWidth
@@ -804,47 +972,18 @@ private struct SideBySideHunkView: View {
             .frame(width: totalWidth, alignment: .leading)
             .background(Color.primary.opacity(0.035))
 
-            ZStack(alignment: .topTrailing) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(hunk.rows) { row in
-                        SideBySideRowView(
-                            row: row,
-                            oldColumnWidth: oldColumnWidth,
-                            newColumnWidth: newColumnWidth
-                        )
-                    }
-                }
-
-                if isHovering, !hunk.selectableLineIDs.isEmpty {
-                    DiffHunkActions(
-                        staged: staged,
-                        isLoading: isLoading,
-                        subject: "this hunk",
-                        lineIDs: hunk.selectableLineIDs,
-                        apply: apply,
-                        discard: discard
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(hunk.rows) { row in
+                    SideBySideRowView(
+                        row: row,
+                        oldColumnWidth: oldColumnWidth,
+                        newColumnWidth: newColumnWidth
                     )
-                    .padding(7)
                 }
-            }
-            .overlay {
-                Rectangle()
-                    .strokeBorder(isHovering ? GitForkTheme.blue : .clear, lineWidth: 1.5)
-                    .allowsHitTesting(false)
-            }
-            .contextMenu {
-                DiffHunkMenu(
-                    staged: staged,
-                    isLoading: isLoading,
-                    lineIDs: hunk.selectableLineIDs,
-                    apply: apply,
-                    discard: discard
-                )
             }
         }
         .frame(width: totalWidth, alignment: .leading)
         .padding(.bottom, 10)
-        .onHover { isHovering = $0 }
     }
 }
 

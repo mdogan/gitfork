@@ -52,10 +52,11 @@ final class RepositoryStore: ObservableObject {
     private var cachedCommitDetails: String?
     private var cachedVerifiedCommit: GitCommit?
     private let recentKey = "recentRepositories"
+    private let monitorInterval: Duration
     private static let signCommitKey = "signCommitsWithGPG"
-    private static let monitorInterval: Duration = .seconds(2)
 
-    init() {
+    init(monitorInterval: Duration = .seconds(2)) {
+        self.monitorInterval = monitorInterval
         signCommit = UserDefaults.standard.bool(forKey: Self.signCommitKey)
         recentRepositories = (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
@@ -280,6 +281,14 @@ final class RepositoryStore: ObservableObject {
     }
 
     private func showChange(_ change: WorkingChange?, staged: Bool) {
+        let previousEntryID = selectedChange.map {
+            ChangeEntryID(path: $0.path, staged: selectedChangeIsStaged)
+        }
+        let nextEntryID = change.map {
+            ChangeEntryID(path: $0.path, staged: staged)
+        }
+        let isReloadingCurrentEntry = previousEntryID == nextEntryID
+
         detailTask?.cancel()
         detailTask = nil
         selectedStash = nil
@@ -290,7 +299,9 @@ final class RepositoryStore: ObservableObject {
             diff = ""
             return
         }
-        diff = ""
+        if !isReloadingCurrentEntry {
+            diff = ""
+        }
         loadGeneration += 1
         let generation = loadGeneration
         detailTask = Task {
@@ -630,13 +641,21 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
-    private func startMonitoring(root: URL) {
+    private func startMonitoring(
+        root: URL,
+        refreshImmediately: Bool = false
+    ) {
         stopMonitoring(resetState: false)
         guard isMonitoringActive else { return }
+        let monitorInterval = monitorInterval
         monitorTask = Task { [weak self] in
+            if refreshImmediately {
+                guard let self else { return }
+                await self.refreshIfRepositoryChanged(root: root)
+            }
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: Self.monitorInterval)
+                    try await Task.sleep(for: monitorInterval)
                 } catch {
                     return
                 }
@@ -659,7 +678,7 @@ final class RepositoryStore: ObservableObject {
         isMonitoringActive = isActive
         guard let root = repositoryURL else { return }
         if isActive {
-            startMonitoring(root: root)
+            startMonitoring(root: root, refreshImmediately: true)
         } else {
             stopMonitoring(resetState: false)
         }

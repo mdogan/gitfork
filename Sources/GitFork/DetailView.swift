@@ -353,6 +353,10 @@ private struct DiffTextView: View {
         parsedDiff.document
     }
 
+    private var isPreparingReplacement: Bool {
+        !parsedDiff.source.isEmpty && parsedDiff.source != text
+    }
+
     var body: some View {
         Group {
             if text.isEmpty {
@@ -363,7 +367,7 @@ private struct DiffTextView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if parsedDiff.source != text {
+            } else if parsedDiff.source.isEmpty {
                 VStack {
                     ProgressView()
                     Text("Preparing diff…")
@@ -390,7 +394,7 @@ private struct DiffTextView: View {
                                                 ? selectedDisplayLineIDs
                                                 : [],
                                             staged: staged,
-                                            isLoading: store.isLoading,
+                                            isLoading: store.isLoading || isPreparingReplacement,
                                             selectRange: { lineIDs in
                                                 selectedHunkID = hunk.id
                                                 selectedDisplayLineIDs = lineIDs

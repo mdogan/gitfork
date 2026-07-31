@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import GitFork
@@ -1415,6 +1416,95 @@ struct GitParserTests {
         }
         #expect(!store.isLoading)
         #expect(store.repositoryURL?.standardizedFileURL == root.standardizedFileURL)
+    }
+
+    @Test
+    @MainActor
+    func refreshingSelectedChangeKeepsExistingDiffUntilReplacementArrives() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkDiffRefreshTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "one\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try "two\n".write(to: readme, atomically: true, encoding: .utf8)
+
+        let store = RepositoryStore()
+        store.setMonitoringActive(false)
+        store.openRepository(root)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!store.isLoading)
+
+        store.selectChanges()
+        for _ in 0..<500 {
+            guard !store.diff.contains("+two") else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.diff.contains("+two"))
+
+        var publishedDiffs: [String] = []
+        let observation = store.$diff
+            .dropFirst()
+            .sink { publishedDiffs.append($0) }
+        defer { observation.cancel() }
+
+        try "three\n".write(to: readme, atomically: true, encoding: .utf8)
+        store.refresh()
+        for _ in 0..<500 {
+            guard !store.diff.contains("+three") else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(store.diff.contains("+three"))
+        #expect(!publishedDiffs.contains(""))
+    }
+
+    @Test
+    @MainActor
+    func activatingMonitoringChecksForChangesImmediately() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkMonitorActivationTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "one\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        let store = RepositoryStore(monitorInterval: .seconds(30))
+        store.setMonitoringActive(false)
+        defer { store.setMonitoringActive(false) }
+        store.openRepository(root)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!store.isLoading)
+        #expect(store.changes.isEmpty)
+
+        try "two\n".write(to: readme, atomically: true, encoding: .utf8)
+        store.setMonitoringActive(true)
+        for _ in 0..<500 {
+            guard store.changes.isEmpty else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(store.changes.contains { $0.path == "README.md" })
     }
 
     @Test

@@ -43,9 +43,45 @@ struct UnifiedDiffHunk: Identifiable, Equatable, Sendable {
     let selectableLineIDs: Set<Int>
 }
 
+/// How a commit or patch touched one file, as reported by the diff header.
+enum UnifiedDiffFileChange: Equatable, Sendable {
+    case added
+    case modified
+    case deleted
+    case renamed
+    case copied
+
+    /// The single-letter Git status, matching the letters the working-tree
+    /// change list uses so both lists share `Color.statusColor`.
+    var symbol: String {
+        switch self {
+        case .added: "A"
+        case .modified: "M"
+        case .deleted: "D"
+        case .renamed: "R"
+        case .copied: "C"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .added: "Added"
+        case .modified: "Modified"
+        case .deleted: "Deleted"
+        case .renamed: "Renamed"
+        case .copied: "Copied"
+        }
+    }
+}
+
 struct UnifiedDiffFile: Identifiable, Equatable, Sendable {
     let id: Int
     let path: String
+    /// The pre-rename or pre-copy path, when the header reports one.
+    let originalPath: String?
+    let change: UnifiedDiffFileChange
+    let additions: Int
+    let deletions: Int
     let lines: [UnifiedDiffLine]
 }
 
@@ -146,6 +182,10 @@ struct UnifiedDiff: Sendable {
             return UnifiedDiffFile(
                 id: start,
                 path: Self.filePath(in: fileLines),
+                originalPath: Self.originalPath(in: fileLines),
+                change: Self.change(in: fileLines),
+                additions: fileLines.lazy.filter { $0.kind == .addition }.count,
+                deletions: fileLines.lazy.filter { $0.kind == .deletion }.count,
                 lines: fileLines
             )
         }
@@ -170,8 +210,8 @@ struct UnifiedDiff: Sendable {
         }
         .map {
             $0.text.hasPrefix("rename to ")
-                ? String($0.text.dropFirst("rename to ".count))
-                : String($0.text.dropFirst("copy to ".count))
+                ? unquoted(String($0.text.dropFirst("rename to ".count)))
+                : unquoted(String($0.text.dropFirst("copy to ".count)))
         }
         let newPath = lines.first { $0.text.hasPrefix("+++ ") }
             .map { String($0.text.dropFirst(4)) }
@@ -192,6 +232,37 @@ struct UnifiedDiff: Sendable {
             path.removeFirst(2)
         }
         return path
+    }
+
+    /// Header markers such as `rename from` never appear inside a hunk body,
+    /// where every line carries a `+`, `-`, or space marker, so an unanchored
+    /// prefix match cannot collide with file content.
+    private static func originalPath(in lines: [UnifiedDiffLine]) -> String? {
+        let prefixes = ["rename from ", "copy from "]
+        for line in lines {
+            guard let prefix = prefixes.first(where: { line.text.hasPrefix($0) }) else {
+                continue
+            }
+            return unquoted(String(line.text.dropFirst(prefix.count)))
+        }
+        return nil
+    }
+
+    private static func change(in lines: [UnifiedDiffLine]) -> UnifiedDiffFileChange {
+        for line in lines {
+            if line.text.hasPrefix("new file mode ") { return .added }
+            if line.text.hasPrefix("deleted file mode ") { return .deleted }
+            if line.text.hasPrefix("rename from ") { return .renamed }
+            if line.text.hasPrefix("copy from ") { return .copied }
+        }
+        return .modified
+    }
+
+    private static func unquoted(_ path: String) -> String {
+        guard path.hasPrefix("\""), path.hasSuffix("\""), path.count > 1 else {
+            return path
+        }
+        return String(path.dropFirst().dropLast())
     }
 
     private static func diffHeaderPath(_ header: String?) -> String? {

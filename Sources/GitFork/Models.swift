@@ -17,12 +17,21 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
 enum CommitHistoryScope: Equatable, Sendable {
     case all
     case revision(String)
+    case commit(String)
     case path(String)
     case lostAndDangling
 
     init(revision: String?) {
         self = revision.map(Self.revision) ?? .all
     }
+}
+
+/// A request to scroll the history list to a commit the user opened by hash.
+/// The identifier makes every request distinct, so opening the same commit
+/// twice scrolls to it twice.
+struct CommitReveal: Equatable, Sendable {
+    let id = UUID()
+    let hash: String
 }
 
 struct RepositoryPathItem: Identifiable, Hashable, Sendable {

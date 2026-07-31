@@ -42,7 +42,9 @@ final class RepositoryStore: ObservableObject {
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
     @Published var isShowingPathHistoryPicker = false
+    @Published var isShowingCommitHashPicker = false
     @Published var isShowingKeyboardShortcuts = false
+    @Published private(set) var commitReveal: CommitReveal?
     @Published private(set) var repositoryPathItems: [RepositoryPathItem] = []
     @Published private(set) var isLoadingRepositoryPaths = false
     @Published private(set) var recentRepositories: [URL] = []
@@ -166,6 +168,60 @@ final class RepositoryStore: ObservableObject {
                 }
                 self.show(error)
             }
+        }
+    }
+
+    func showCommitHashPicker() {
+        guard repositoryURL != nil else { return }
+        isShowingCommitHashPicker = true
+    }
+
+    /// Resolves a hash without changing what the window shows, so the commit
+    /// picker can say whether a hash exists before the user opens it.
+    func lookUpCommit(hash: String) async throws -> GitCommit {
+        guard let root = repositoryURL else {
+            throw GitOperationError(
+                command: "git rev-parse --verify \(hash)",
+                message: "Open a repository before looking up a commit."
+            )
+        }
+        return try await client.commit(at: root, matchingHash: hash)
+    }
+
+    /// Opens the commit a short or full hash points at. A commit that is
+    /// already loaded keeps the current history in place; anything else — an
+    /// older commit, or one no reference reaches — narrows the history to that
+    /// commit and its ancestors.
+    func openCommit(hash: String) {
+        guard let root = repositoryURL else { return }
+        guard let query = CommitHashQuery.normalized(hash) else {
+            errorMessage = """
+            Enter a commit hash of at least \(CommitHashQuery.minimumLength) \
+            hexadecimal characters.
+            """
+            return
+        }
+
+        _ = startOperation("Opening commit \(query)") {
+            let commit = try await self.client.commit(at: root, matchingHash: query)
+            try Task.checkCancellation()
+            guard self.isCurrentRepository(root) else { return }
+
+            self.selectedStash = nil
+            self.selectedSection = .history
+            if let loaded = self.commits.first(where: { $0.hash == commit.hash }) {
+                if !self.filteredCommits.contains(loaded) {
+                    self.searchText = ""
+                }
+                self.showCommit(loaded)
+            } else {
+                self.searchText = ""
+                self.selectedReference = nil
+                self.historyScope = .commit(commit.hash)
+                self.selectedCommit = commit
+                try await self.reloadHistory(root: root, scope: self.historyScope)
+            }
+            self.commitReveal = CommitReveal(hash: commit.hash)
         }
     }
 
@@ -1041,6 +1097,8 @@ final class RepositoryStore: ObservableObject {
         repositoryPathItems = []
         isLoadingRepositoryPaths = false
         isShowingPathHistoryPicker = false
+        isShowingCommitHashPicker = false
+        commitReveal = nil
         detailTask?.cancel()
         detailTask = nil
         loadGeneration += 1

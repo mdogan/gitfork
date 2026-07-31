@@ -106,15 +106,41 @@ private final class SideBySideDiffWindowStore: ObservableObject {
     }
 }
 
+/// Anchors the very top of a diff so "Scroll to Top" always has a target, in a
+/// type of its own so it can never collide with a line or file identifier.
+private enum DiffScrollAnchor: Hashable {
+    case top
+}
+
 struct DetailView: View {
     @EnvironmentObject private var store: RepositoryStore
+    @State private var parsedDiff = ParsedUnifiedDiff.empty
+    @State private var focusedFileID: Int?
+    @State private var scrollToTopToken: UUID?
+
+    /// The parsed files, but only once they describe the diff on screen, so the
+    /// file chooser never lists the previous selection's files.
+    private var currentFiles: [UnifiedDiffFile] {
+        parsedDiff.source == store.diff ? parsedDiff.document.files : []
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if let commit = store.selectedCommit, store.selectedSection == .history {
-                CommitHeader(commit: commit)
+                CommitHeader(
+                    commit: commit,
+                    files: currentFiles,
+                    focusedFileID: focusedFileID,
+                    focus: { focusedFileID = $0?.id },
+                    scrollToTop: { scrollToTopToken = UUID() }
+                )
                 Divider()
-                DiffTextView(text: store.diff)
+                DiffTextView(
+                    text: store.diff,
+                    parsedDiff: parsedDiff,
+                    focusedFileID: focusedFileID,
+                    scrollToTopToken: scrollToTopToken
+                )
             } else if let change = store.selectedChange, store.selectedSection == .changes {
                 ChangeHeader(
                     change: change,
@@ -123,6 +149,7 @@ struct DetailView: View {
                 Divider()
                 DiffTextView(
                     text: store.diff,
+                    parsedDiff: parsedDiff,
                     change: change,
                     staged: store.selectedChangeIsStaged
                 )
@@ -135,11 +162,29 @@ struct DetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: store.diff) {
+            let text = store.diff
+            guard !text.isEmpty else {
+                parsedDiff = .empty
+                return
+            }
+            let parsed = await DiffParsing.unified(text)
+            guard !Task.isCancelled, parsed.source == store.diff else { return }
+            parsedDiff = parsed
+        }
+        .onChange(of: store.diff) {
+            // A new commit brings a new set of files; never carry a filter over.
+            focusedFileID = nil
+        }
     }
 }
 
 private struct CommitHeader: View {
     let commit: GitCommit
+    let files: [UnifiedDiffFile]
+    let focusedFileID: Int?
+    let focus: (UnifiedDiffFile?) -> Void
+    let scrollToTop: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -163,10 +208,14 @@ private struct CommitHeader: View {
             }
             .font(.callout)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 6) {
                 CopyableValue(label: "COMMIT", value: commit.hash, display: commit.shortHash)
-                if let parent = commit.parents.first {
-                    CopyableValue(label: "PARENT", value: parent, display: String(parent.prefix(8)))
+                ForEach(Array(commit.parents.enumerated()), id: \.element) { index, parent in
+                    CopyableValue(
+                        label: commit.parents.count > 1 ? "PARENT \(index + 1)" : "PARENT",
+                        value: parent,
+                        display: String(parent.prefix(8))
+                    )
                 }
                 if commit.parents.count > 1 {
                     Text("MERGE")
@@ -176,11 +225,158 @@ private struct CommitHeader: View {
                         .padding(.vertical, 3)
                         .background(GitForkTheme.purple.opacity(0.12), in: Capsule())
                 }
+
+                Spacer(minLength: 12)
+
+                CommitFileChooser(
+                    files: files,
+                    focusedFileID: focusedFileID,
+                    focus: focus,
+                    scrollToTop: scrollToTop
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(HeaderBackground())
+    }
+}
+
+/// A pull-down list of every file a commit touches. The list itself shows what
+/// the commit changed; choosing a row narrows the diff to that single file, and
+/// "All Files" restores the whole commit from the top.
+private struct CommitFileChooser: View {
+    @EnvironmentObject private var store: RepositoryStore
+    let files: [UnifiedDiffFile]
+    let focusedFileID: Int?
+    let focus: (UnifiedDiffFile?) -> Void
+    let scrollToTop: () -> Void
+
+    private var focusedFile: UnifiedDiffFile? {
+        files.first { $0.id == focusedFileID }
+    }
+
+    private var additions: Int {
+        files.reduce(0) { $0 + $1.additions }
+    }
+
+    private var deletions: Int {
+        files.reduce(0) { $0 + $1.deletions }
+    }
+
+    private var summary: String {
+        let fileCount = files.count == 1 ? "1 file" : "\(files.count) files"
+        return "\(fileCount) changed · +\(additions) −\(deletions)"
+    }
+
+    private var title: String {
+        if let focusedFile {
+            return URL(fileURLWithPath: focusedFile.path).lastPathComponent
+        }
+        if files.isEmpty { return "Files" }
+        return files.count == 1 ? "1 File" : "All \(files.count) Files"
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Menu {
+                Section(summary) {
+                    Button {
+                        focus(nil)
+                    } label: {
+                        Label(
+                            "All Files",
+                            systemImage: focusedFile == nil
+                                ? "checkmark"
+                                : "square.stack.3d.up"
+                        )
+                    }
+
+                    ForEach(files) { file in
+                        Button {
+                            focus(file)
+                        } label: {
+                            Label(
+                                label(for: file),
+                                systemImage: focusedFileID == file.id
+                                    ? "checkmark"
+                                    : symbolName(for: file.change)
+                            )
+                        }
+                    }
+                }
+
+                Divider()
+
+                Button(action: scrollToTop) {
+                    Label("Scroll to Top", systemImage: "arrow.up.to.line")
+                }
+
+                Button {
+                    store.showPathHistoryPicker()
+                } label: {
+                    Label("File or Directory History…", systemImage: "clock.arrow.circlepath")
+                }
+                .disabled(store.repositoryURL == nil)
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: focusedFile == nil
+                        ? "list.bullet.rectangle"
+                        : "doc.text")
+                        .foregroundStyle(GitForkTheme.accent)
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout.weight(.medium))
+                .frame(maxWidth: 320)
+            }
+            .menuStyle(.button)
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+            .fixedSize()
+            .disabled(files.isEmpty)
+            .help(
+                focusedFile == nil
+                    ? "List the files in this commit and show one on its own"
+                    : "Showing only \(focusedFile?.path ?? "") · choose another file or All Files"
+            )
+            .accessibilityLabel("Files changed in this commit")
+
+            if focusedFile != nil {
+                Button {
+                    focus(nil)
+                } label: {
+                    Label("Show All", systemImage: "xmark.circle")
+                        .font(.callout)
+                }
+                .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+                .help("Show every file in this commit again, from the top")
+            }
+        }
+    }
+
+    private func label(for file: UnifiedDiffFile) -> String {
+        var label = file.path
+        if let originalPath = file.originalPath, originalPath != file.path {
+            label += "  ← \(originalPath)"
+        }
+        if file.additions > 0 || file.deletions > 0 {
+            label += "  +\(file.additions) −\(file.deletions)"
+        }
+        return label
+    }
+
+    private func symbolName(for change: UnifiedDiffFileChange) -> String {
+        switch change {
+        case .added: "plus.circle"
+        case .modified: "pencil.circle"
+        case .deleted: "minus.circle"
+        case .renamed: "arrow.turn.up.right"
+        case .copied: "doc.on.doc"
+        }
     }
 }
 
@@ -281,24 +477,51 @@ private struct ChangeHeader: View {
     }
 }
 
+/// A labelled hash that copies its full value on click, stays selectable, and
+/// keeps a Copy item in its context menu.
 private struct CopyableValue: View {
     let label: String
     let value: String
     let display: String
 
+    @State private var didCopy = false
+    @State private var resetTask: Task<Void, Never>?
+
     var body: some View {
-        HStack(spacing: 5) {
-            Text(label)
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.tertiary)
-            Text(display)
-                .font(.caption.monospaced())
-        }
-        .contextMenu {
-            Button("Copy \(label.capitalized)") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(value, forType: .string)
+        Button(action: copy) {
+            HStack(spacing: 5) {
+                Text(label)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+                Text(display)
+                    .font(.caption.monospaced())
+                Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                    .font(.caption2)
+                    .foregroundStyle(
+                        didCopy ? AnyShapeStyle(GitForkTheme.green) : AnyShapeStyle(.tertiary)
+                    )
             }
+        }
+        .buttonStyle(GitForkHoverButtonStyle(.text))
+        .help(didCopy ? "Copied \(value)" : "Copy \(value)")
+        .accessibilityLabel("Copy \(label.lowercased()) \(value)")
+        .contextMenu {
+            Button("Copy \(label.capitalized)", action: copy)
+        }
+        .onDisappear {
+            resetTask?.cancel()
+        }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        didCopy = true
+        resetTask?.cancel()
+        resetTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            didCopy = false
         }
     }
 }
@@ -340,10 +563,12 @@ private enum DiffParsing {
 private struct DiffTextView: View {
     @EnvironmentObject private var store: RepositoryStore
     let text: String
+    let parsedDiff: ParsedUnifiedDiff
     var change: WorkingChange?
     var staged = false
+    var focusedFileID: Int?
+    var scrollToTopToken: UUID?
 
-    @State private var parsedDiff = ParsedUnifiedDiff.empty
     @State private var showsLargeDiff = false
     @State private var selectedDisplayLineIDs: Set<Int> = []
     @State private var selectedHunkID: Int?
@@ -355,6 +580,22 @@ private struct DiffTextView: View {
 
     private var isPreparingReplacement: Bool {
         !parsedDiff.source.isEmpty && parsedDiff.source != text
+    }
+
+    /// The one file the chooser narrowed to, if it is still part of this diff.
+    private var focusedFile: UnifiedDiffFile? {
+        guard let focusedFileID else { return nil }
+        return document.files.first { $0.id == focusedFileID }
+    }
+
+    private var visibleFiles: [UnifiedDiffFile] {
+        focusedFile.map { [$0] } ?? document.files
+    }
+
+    /// Narrowing to one file also narrows what the large-diff gate measures, so
+    /// a small file stays readable inside an enormous commit.
+    private var displayedLineCount: Int {
+        focusedFile?.lines.count ?? document.lines.count
     }
 
     var body: some View {
@@ -375,89 +616,47 @@ private struct DiffTextView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if document.lines.count > DiffLayout.automaticLineLimit,
+            } else if displayedLineCount > DiffLayout.automaticLineLimit,
                       !showsLargeDiff {
                 LargeDiffPlaceholder(
-                    lineCount: document.lines.count,
+                    lineCount: displayedLineCount,
                     action: { showsLargeDiff = true }
                 )
             } else {
                 GeometryReader { viewport in
-                    ScrollView([.horizontal, .vertical]) {
-                        Group {
-                            if change != nil, !document.displayHunks.isEmpty {
-                                LazyVStack(alignment: .leading, spacing: 0) {
-                                    ForEach(document.displayHunks) { hunk in
-                                        DiffHunkView(
-                                            hunk: hunk,
-                                            selectedLineIDs: selectedHunkID == hunk.id
-                                                ? selectedDisplayLineIDs
-                                                : [],
-                                            staged: staged,
-                                            isLoading: store.isLoading || isPreparingReplacement,
-                                            selectRange: { lineIDs in
-                                                selectedHunkID = hunk.id
-                                                selectedDisplayLineIDs = lineIDs
-                                            },
-                                            apply: apply,
-                                            discard: requestDiscard
-                                        )
-                                    }
-                                }
-                                .padding(.vertical, 8)
-                            } else if !document.files.isEmpty {
-                                LazyVStack(alignment: .leading, spacing: 16) {
-                                    if !document.preambleLines.isEmpty {
-                                        VStack(alignment: .leading, spacing: 0) {
-                                            ForEach(document.preambleLines) { line in
-                                                DiffLineView(
-                                                    line: line,
-                                                    isRangeSelected: false,
-                                                    allowsTextSelection: true
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    ForEach(document.files) { file in
-                                        CommitDiffFileView(file: file)
-                                    }
-                                }
-                                .padding(12)
-                            } else {
-                                LazyVStack(alignment: .leading, spacing: 0) {
-                                    ForEach(document.lines) { line in
-                                        DiffLineView(
-                                            line: line,
-                                            isRangeSelected: false,
-                                            allowsTextSelection: true
-                                        )
-                                    }
-                                }
-                                .padding(.bottom, 8)
+                    ScrollViewReader { proxy in
+                        ScrollView([.horizontal, .vertical]) {
+                            diffContent
+                                .frame(
+                                    minWidth: viewport.size.width,
+                                    minHeight: viewport.size.height,
+                                    alignment: .topLeading
+                                )
+                                // Tagging the whole content gives "Scroll to
+                                // Top" a target in every diff layout.
+                                .id(DiffScrollAnchor.top)
+                        }
+                        .background(Color(nsColor: .textBackgroundColor))
+                        // Rebuilding the scroll view for each focus change is
+                        // what puts a newly chosen file at the top of the pane.
+                        .id(focusedFileID)
+                        .task(id: scrollToTopToken) {
+                            guard scrollToTopToken != nil else { return }
+                            try? await Task.sleep(for: .milliseconds(20))
+                            guard !Task.isCancelled else { return }
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(DiffScrollAnchor.top, anchor: .topLeading)
                             }
                         }
-                        .frame(
-                            minWidth: viewport.size.width,
-                            minHeight: viewport.size.height,
-                            alignment: .topLeading
-                        )
                     }
-                    .background(Color(nsColor: .textBackgroundColor))
                 }
             }
         }
-        .task(id: text) {
-            guard !text.isEmpty else {
-                parsedDiff = .empty
-                return
-            }
-            let parsed = await DiffParsing.unified(text)
-            guard !Task.isCancelled, parsed.source == text else { return }
-            parsedDiff = parsed
-        }
         .onChange(of: text) {
             clearSelection()
+            showsLargeDiff = false
+        }
+        .onChange(of: focusedFileID) {
             showsLargeDiff = false
         }
         .alert(
@@ -475,6 +674,63 @@ private struct DiffTextView: View {
             }
         } message: {
             Text(discardMessage)
+        }
+    }
+
+    @ViewBuilder
+    private var diffContent: some View {
+        if change != nil, !document.displayHunks.isEmpty {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(document.displayHunks) { hunk in
+                    DiffHunkView(
+                        hunk: hunk,
+                        selectedLineIDs: selectedHunkID == hunk.id
+                            ? selectedDisplayLineIDs
+                            : [],
+                        staged: staged,
+                        isLoading: store.isLoading || isPreparingReplacement,
+                        selectRange: { lineIDs in
+                            selectedHunkID = hunk.id
+                            selectedDisplayLineIDs = lineIDs
+                        },
+                        apply: apply,
+                        discard: requestDiscard
+                    )
+                }
+            }
+            .padding(.vertical, 8)
+        } else if !document.files.isEmpty {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                // The preamble is the commit's summary of every file, so it only
+                // belongs to the unfiltered diff.
+                if focusedFile == nil, !document.preambleLines.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(document.preambleLines) { line in
+                            DiffLineView(
+                                line: line,
+                                isRangeSelected: false,
+                                allowsTextSelection: true
+                            )
+                        }
+                    }
+                }
+
+                ForEach(visibleFiles) { file in
+                    CommitDiffFileView(file: file)
+                }
+            }
+            .padding(12)
+        } else {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(document.lines) { line in
+                    DiffLineView(
+                        line: line,
+                        isRangeSelected: false,
+                        allowsTextSelection: true
+                    )
+                }
+            }
+            .padding(.bottom, 8)
         }
     }
 
@@ -701,6 +957,10 @@ private struct CommitDiffFileView: View {
         return file.lines[...]
     }
 
+    private var statusColor: Color {
+        Color.statusColor(file.change.symbol)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 7) {
@@ -709,8 +969,23 @@ private struct CommitDiffFileView: View {
                 Text(file.path)
                     .font(.callout.monospaced().weight(.semibold))
                     .textSelection(.enabled)
+                Text(file.change.title)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(statusColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(statusColor.opacity(0.12), in: Capsule())
                 Spacer(minLength: 12)
+                if file.additions > 0 {
+                    Text("+\(file.additions)")
+                        .foregroundStyle(GitForkTheme.green)
+                }
+                if file.deletions > 0 {
+                    Text("−\(file.deletions)")
+                        .foregroundStyle(GitForkTheme.red)
+                }
             }
+            .font(.caption.monospaced())
             .padding(.horizontal, 10)
             .frame(height: 34)
             .background(Color.primary.opacity(0.045))

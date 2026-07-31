@@ -255,6 +255,73 @@ struct GitParserTests {
     }
 
     @Test
+    func summarizesEachFileInACommitDiff() {
+        let diff = """
+        diff --git a/Sources/Added.swift b/Sources/Added.swift
+        new file mode 100644
+        --- /dev/null
+        +++ b/Sources/Added.swift
+        @@ -0,0 +2 @@
+        +first
+        +second
+        diff --git a/Sources/Edited.swift b/Sources/Edited.swift
+        index 1111111..2222222 100644
+        --- a/Sources/Edited.swift
+        +++ b/Sources/Edited.swift
+        @@ -1,2 +1,2 @@
+         context
+        -old
+        +new
+        diff --git a/removed.swift b/removed.swift
+        deleted file mode 100644
+        --- a/removed.swift
+        +++ /dev/null
+        @@ -1 +0,0 @@
+        -removed
+        diff --git "a/old name.swift" "b/new name.swift"
+        similarity index 100%
+        rename from "old name.swift"
+        rename to "new name.swift"
+        """
+        let files = UnifiedDiff(diff).files
+
+        #expect(files.count == 4)
+        #expect(files[0].change == .added)
+        #expect(files[0].additions == 2)
+        #expect(files[0].deletions == 0)
+        #expect(files[0].originalPath == nil)
+        #expect(files[1].change == .modified)
+        #expect(files[1].additions == 1)
+        #expect(files[1].deletions == 1)
+        #expect(files[2].change == .deleted)
+        #expect(files[2].additions == 0)
+        #expect(files[2].deletions == 1)
+        #expect(files[3].change == .renamed)
+        #expect(files[3].path == "new name.swift")
+        #expect(files[3].originalPath == "old name.swift")
+        #expect(files[3].change.symbol == "R")
+    }
+
+    @Test
+    func doesNotMistakeDiffContentForFileHeaders() {
+        let diff = """
+        diff --git a/notes.txt b/notes.txt
+        index 1111111..2222222 100644
+        --- a/notes.txt
+        +++ b/notes.txt
+        @@ -1,2 +1,2 @@
+        -rename from somewhere
+        +new file mode 100644
+        """
+        let file = UnifiedDiff(diff).files.first
+
+        #expect(file?.change == .modified)
+        #expect(file?.originalPath == nil)
+        #expect(file?.additions == 1)
+        #expect(file?.deletions == 1)
+    }
+
+    @Test
     func parsesCommitRecords() {
         let input = "abcdef123456\u{1f}111111 222222\u{1f}Ada Lovelace\u{1f}ada@example.com\u{1f}2026-07-23T10:30:00+03:00\u{1f}HEAD -> main, tag: v1.0\u{1f}G\u{1f}ABCDEF1234567890\u{1f}Ada Lovelace\u{1f}Good signature\u{1f}Ship native client\u{1e}"
         let commits = GitParser.parseCommits(input)

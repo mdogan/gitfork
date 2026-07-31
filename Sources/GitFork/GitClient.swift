@@ -307,7 +307,7 @@ struct GitClient: Sendable {
         case .all:
             revision = nil
             path = nil
-        case let .revision(value):
+        case let .revision(value), let .commit(value):
             revision = value
             path = nil
         case let .path(value):
@@ -587,10 +587,33 @@ struct GitClient: Sendable {
         guard let commit = GitParser.parseCommits(result.output).first else {
             throw GitOperationError(
                 command: "git log --max-count=1 \(revision)",
-                message: "Git did not return the selected stash commit."
+                message: "Git did not return the requested commit."
             )
         }
         return commit
+    }
+
+    /// Resolves a short or full commit hash, including hashes that are only
+    /// reachable from the reflog or from no reference at all.
+    func commit(at root: URL, matchingHash hash: String) async throws -> GitCommit {
+        let arguments = ["rev-parse", "--verify", "--end-of-options", "\(hash)^{commit}"]
+        let resolved = try await runAllowingFailure(arguments, in: root)
+        guard resolved.exitCode == 0 else {
+            throw GitOperationError(
+                command: "git \(arguments.joined(separator: " "))",
+                message: Self.commitLookupMessage(for: hash, error: resolved.error)
+            )
+        }
+        return try await commit(
+            at: root,
+            revision: resolved.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    static func commitLookupMessage(for hash: String, error: String) -> String {
+        error.localizedCaseInsensitiveContains("ambiguous")
+            ? "“\(hash)” matches more than one object. Type more of the hash."
+            : "No commit in this repository matches “\(hash)”."
     }
 
     func stage(at root: URL, paths: [String]) async throws {

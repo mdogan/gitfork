@@ -40,6 +40,12 @@ struct GitForkApp: App {
                 .keyboardShortcut("f")
                 .disabled(store.repositoryURL == nil)
 
+                Button("Open Commit…") {
+                    store.showCommitHashPicker()
+                }
+                .keyboardShortcut("g")
+                .disabled(store.repositoryURL == nil)
+
                 Button("Changes") {
                     store.selectChanges()
                 }
@@ -114,6 +120,10 @@ struct RootView: View {
         }
         .sheet(isPresented: $store.isShowingPathHistoryPicker) {
             PathHistoryPickerSheet()
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $store.isShowingCommitHashPicker) {
+            CommitHashPickerSheet()
                 .environmentObject(store)
         }
         .sheet(isPresented: $store.isShowingKeyboardShortcuts) {

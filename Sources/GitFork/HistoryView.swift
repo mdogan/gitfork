@@ -37,39 +37,47 @@ struct HistoryView: View {
                     description: Text(emptyDescription)
                 )
             } else {
-                List(selection: commitSelection) {
-                    ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
-                        CommitRow(
-                            commit: commit,
-                            graphRow: graph?.rows[index],
-                            graphColumnCount: graph?.columnCount ?? 0,
-                            showsGraph: showsGraph
-                        )
-                        .tag(commit)
-                        .listRowInsets(
-                            EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 10)
-                        )
-                        .listRowSeparator(.hidden)
-                    }
-
-                    if store.canLoadMoreHistory || store.isLoadingMoreHistory {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Loading more commits…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
+                ScrollViewReader { proxy in
+                    List(selection: commitSelection) {
+                        ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
+                            CommitRow(
+                                commit: commit,
+                                graphRow: graph?.rows[index],
+                                graphColumnCount: graph?.columnCount ?? 0,
+                                showsGraph: showsGraph
+                            )
+                            .tag(commit)
+                            .listRowInsets(
+                                EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 10)
+                            )
+                            .listRowSeparator(.hidden)
                         }
-                        .padding(.vertical, 10)
-                        .listRowSeparator(.hidden)
-                        .onAppear {
-                            store.loadMoreHistory()
+
+                        if store.canLoadMoreHistory || store.isLoadingMoreHistory {
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Loading more commits…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                            .padding(.vertical, 10)
+                            .listRowSeparator(.hidden)
+                            .onAppear {
+                                store.loadMoreHistory()
+                            }
+                        }
+                    }
+                    .listStyle(.inset)
+                    .onChange(of: store.commitReveal) { _, reveal in
+                        guard let reveal else { return }
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(reveal.hash, anchor: .center)
                         }
                     }
                 }
-                .listStyle(.inset)
             }
         }
         .toolbar {
@@ -96,6 +104,8 @@ struct HistoryView: View {
         switch store.historyScope {
         case let .path(path):
             return path
+        case let .commit(hash):
+            return "Commit \(String(hash.prefix(8)))"
         case .lostAndDangling:
             return "Unreachable Commits"
         case .all, .revision:
@@ -112,7 +122,7 @@ struct HistoryView: View {
             return "No Path History"
         case .lostAndDangling:
             return "No Unreachable Commits"
-        case .all, .revision:
+        case .all, .revision, .commit:
             return "No Commits"
         }
     }
@@ -123,7 +133,7 @@ struct HistoryView: View {
             return "doc.text.magnifyingglass"
         case .lostAndDangling:
             return "lifepreserver"
-        case .all, .revision:
+        case .all, .revision, .commit:
             return "clock"
         }
     }
@@ -135,6 +145,8 @@ struct HistoryView: View {
         switch store.historyScope {
         case let .path(path):
             return "No commits affect “\(path)” in this repository’s current references."
+        case let .commit(hash):
+            return "Commit \(String(hash.prefix(8))) is no longer in this repository."
         case .lostAndDangling:
             return "No commits are unreachable from this repository’s current references."
         case .all, .revision:
@@ -146,7 +158,7 @@ struct HistoryView: View {
         switch scope {
         case .path, .lostAndDangling:
             return false
-        case .all, .revision:
+        case .all, .revision, .commit:
             return true
         }
     }

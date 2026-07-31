@@ -83,6 +83,7 @@ struct RootView: View {
                 RepositoryView()
             }
         }
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         .onOpenURL { url in
             store.openExternalURL(url)
         }

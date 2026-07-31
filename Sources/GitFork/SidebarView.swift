@@ -8,12 +8,20 @@ struct SidebarView: View {
     @State private var stashesExpanded = false
     @State private var worktreesExpanded = false
 
+    private var primaryBranch: GitReference? {
+        GitReference.primaryLocalBranch(in: store.references)
+    }
+
     private var currentBranch: GitReference? {
-        store.references.first { $0.kind == .localBranch && $0.isCurrent }
+        store.references.first {
+            $0.kind == .localBranch && $0.isCurrent && $0 != primaryBranch
+        }
     }
 
     private var remainingLocalBranches: [GitReference] {
-        store.references.filter { $0.kind == .localBranch && !$0.isCurrent }
+        store.references.filter {
+            $0.kind == .localBranch && !$0.isCurrent && $0 != primaryBranch
+        }
     }
 
     private func references(of kind: ReferenceKind) -> [GitReference] {
@@ -65,18 +73,29 @@ struct SidebarView: View {
             }
 
             Section(isExpanded: $branchesExpanded) {
+                if let primaryBranch {
+                    ReferenceSidebarRow(
+                        reference: primaryBranch,
+                        title: primaryBranch.name,
+                        icon: primaryBranch.isCurrent
+                            ? "checkmark.circle.fill"
+                            : primaryBranch.kind.icon
+                    )
+                    .fontWeight(.bold)
+                }
+
                 if let currentBranch {
                     ReferenceSidebarRow(
                         reference: currentBranch,
                         title: currentBranch.name,
-                        icon: "checkmark"
+                        icon: "checkmark.circle.fill"
                     )
                     .fontWeight(.semibold)
                 }
 
                 ReferenceTreeRows(references: remainingLocalBranches)
 
-                if currentBranch == nil && remainingLocalBranches.isEmpty {
+                if primaryBranch == nil && currentBranch == nil && remainingLocalBranches.isEmpty {
                     EmptySidebarRow(title: "No Branches")
                 }
             } header: {
@@ -474,11 +493,23 @@ private struct ReferenceSidebarRow: View {
             title: title,
             icon: icon,
             isSelected: store.selectedReference == reference,
+            isProminent: reference.isCurrent,
             indent: indent
         ) {
             store.selectReference(reference)
         } badge: {
-            EmptyView()
+            if reference.isCurrent {
+                Text("CURRENT")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(GitForkTheme.green)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(GitForkTheme.green.opacity(0.13), in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(GitForkTheme.green.opacity(0.35), lineWidth: 1)
+                    }
+            }
         }
         .help(reference.name)
         .contextMenu {
@@ -585,6 +616,7 @@ private struct SidebarRow<Badge: View>: View {
     let icon: String
     let isSelected: Bool
     let isEnabled: Bool
+    let isProminent: Bool
     let size: SidebarRowSize
     let indent: CGFloat
     let action: () -> Void
@@ -595,6 +627,7 @@ private struct SidebarRow<Badge: View>: View {
         icon: String,
         isSelected: Bool,
         isEnabled: Bool = true,
+        isProminent: Bool = false,
         size: SidebarRowSize = .compact,
         indent: CGFloat = 0,
         action: @escaping () -> Void,
@@ -604,6 +637,7 @@ private struct SidebarRow<Badge: View>: View {
         self.icon = icon
         self.isSelected = isSelected
         self.isEnabled = isEnabled
+        self.isProminent = isProminent
         self.size = size
         self.indent = indent
         self.action = action
@@ -615,7 +649,11 @@ private struct SidebarRow<Badge: View>: View {
             HStack(spacing: size == .regular ? 9 : 7) {
                 Image(systemName: icon)
                     .frame(width: size == .regular ? 20 : 16)
-                    .foregroundStyle(isSelected ? GitForkTheme.accent : .secondary)
+                    .foregroundStyle(
+                        isProminent
+                            ? GitForkTheme.green
+                            : isSelected ? GitForkTheme.accent : .secondary
+                    )
                 Text(title)
                     .lineLimit(1)
                 Spacer()
@@ -635,6 +673,26 @@ private struct SidebarRow<Badge: View>: View {
                     : .compactRow(isSelected: isSelected)
             )
         )
+        .background {
+            if isProminent && !isSelected {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(GitForkTheme.green.opacity(0.10))
+            }
+        }
+        .overlay {
+            if isProminent && !isSelected {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(GitForkTheme.green.opacity(0.32), lineWidth: 1)
+            }
+        }
+        .overlay(alignment: .leading) {
+            if isProminent {
+                Capsule()
+                    .fill(GitForkTheme.green)
+                    .frame(width: 3)
+                    .padding(.vertical, 4)
+            }
+        }
         .help("Show \(title)")
         .listRowBackground(Color.clear)
     }

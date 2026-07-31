@@ -342,6 +342,45 @@ struct GitParserTests {
     }
 
     @Test
+    func prefersMainThenMasterAsPrimaryLocalBranch() throws {
+        let feature = GitReference(
+            name: "feature/sidebar",
+            fullName: "refs/heads/feature/sidebar",
+            kind: .localBranch,
+            target: "111111",
+            isCurrent: true
+        )
+        let master = GitReference(
+            name: "master",
+            fullName: "refs/heads/master",
+            kind: .localBranch,
+            target: "222222",
+            isCurrent: false
+        )
+        let remoteMain = GitReference(
+            name: "main",
+            fullName: "refs/remotes/origin/main",
+            kind: .remoteBranch,
+            target: "333333",
+            isCurrent: false
+        )
+
+        #expect(
+            GitReference.primaryLocalBranch(in: [feature, master, remoteMain]) == master
+        )
+
+        let main = GitReference(
+            name: "main",
+            fullName: "refs/heads/main",
+            kind: .localBranch,
+            target: "444444",
+            isCurrent: false
+        )
+        #expect(GitReference.primaryLocalBranch(in: [master, main]) == main)
+        #expect(GitReference.primaryLocalBranch(in: [feature, remoteMain]) == nil)
+    }
+
+    @Test
     func parsesStashAndNulDelimitedWorktreeRecords() {
         let stashes = GitParser.parseStashes(
             "stash@{0}\u{1f}abcdef\u{1f}On main: sidebar work\u{1e}\n"

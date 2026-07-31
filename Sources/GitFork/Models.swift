@@ -69,6 +69,11 @@ struct GitReference: Identifiable, Hashable, Sendable {
     let isCurrent: Bool
 
     var id: String { fullName }
+
+    static func primaryLocalBranch(in references: [GitReference]) -> GitReference? {
+        references.first { $0.kind == .localBranch && $0.name == "main" }
+            ?? references.first { $0.kind == .localBranch && $0.name == "master" }
+    }
 }
 
 struct ReferenceTreeNode: Identifiable, Hashable, Sendable {

@@ -88,6 +88,8 @@ private final class GitProcessCancellation: @unchecked Sendable {
 }
 
 struct GitClient: Sendable {
+    static let historyPageSize = 300
+
     private let gitURL = URL(fileURLWithPath: "/usr/bin/git")
     private static let verifiedCommitFormat =
         "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%D%x1f%G?%x1f%GK%x1f%GS%x1f%GG%x1f%s%x1e"
@@ -141,32 +143,41 @@ struct GitClient: Sendable {
             .standardizedFileURL
     }
 
-    func snapshot(at root: URL, revision: String? = nil) async throws -> RepositorySnapshot {
+    func snapshot(
+        at root: URL,
+        revision: String? = nil,
+        historyLimit: Int = historyPageSize
+    ) async throws -> RepositorySnapshot {
         try await loadSnapshot(
             at: root,
             historyScope: CommitHistoryScope(revision: revision),
-            includesStateToken: false
+            includesStateToken: false,
+            historyLimit: historyLimit
         ).snapshot
     }
 
     func snapshotAndStateToken(
         at root: URL,
-        revision: String? = nil
+        revision: String? = nil,
+        historyLimit: Int = historyPageSize
     ) async throws -> RepositoryLoad {
         try await snapshotAndStateToken(
             at: root,
-            historyScope: CommitHistoryScope(revision: revision)
+            historyScope: CommitHistoryScope(revision: revision),
+            historyLimit: historyLimit
         )
     }
 
     func snapshotAndStateToken(
         at root: URL,
-        historyScope: CommitHistoryScope
+        historyScope: CommitHistoryScope,
+        historyLimit: Int = historyPageSize
     ) async throws -> RepositoryLoad {
         let load = try await loadSnapshot(
             at: root,
             historyScope: historyScope,
-            includesStateToken: true
+            includesStateToken: true,
+            historyLimit: historyLimit
         )
         guard let stateToken = load.stateToken else {
             preconditionFailure("A repository state token was requested but not loaded.")
@@ -177,7 +188,8 @@ struct GitClient: Sendable {
     private func loadSnapshot(
         at root: URL,
         historyScope: CommitHistoryScope,
-        includesStateToken: Bool
+        includesStateToken: Bool,
+        historyLimit: Int
     ) async throws -> (snapshot: RepositorySnapshot, stateToken: RepositoryStateToken?) {
         async let branchResult = runAllowingFailure(["symbolic-ref", "--quiet", "--short", "HEAD"], in: root)
         async let statusResult = run(Self.statusArguments, in: root)
@@ -188,7 +200,11 @@ struct GitClient: Sendable {
         async let refsResult = run(Self.referenceArguments, in: root)
         async let stashResult = run(Self.stashArguments, in: root)
         async let worktreeResult = run(Self.worktreeArguments, in: root)
-        async let history = history(at: root, scope: historyScope)
+        async let history = history(
+            at: root,
+            scope: historyScope,
+            limit: historyLimit
+        )
 
         let branchCommand = try await branchResult
         let branch: String
@@ -257,49 +273,134 @@ struct GitClient: Sendable {
         return (snapshot, stateToken)
     }
 
-    func history(at root: URL, revision: String? = nil) async throws -> [GitCommit] {
+    func history(
+        at root: URL,
+        revision: String? = nil,
+        offset: Int = 0,
+        limit: Int = historyPageSize
+    ) async throws -> [GitCommit] {
         try await history(
             at: root,
-            scope: CommitHistoryScope(revision: revision)
+            scope: CommitHistoryScope(revision: revision),
+            offset: offset,
+            limit: limit
         )
     }
 
     func history(
         at root: URL,
-        scope: CommitHistoryScope
+        scope: CommitHistoryScope,
+        offset: Int = 0,
+        limit: Int = historyPageSize
     ) async throws -> [GitCommit] {
         if scope == .lostAndDangling {
-            return try await lostAndDanglingCommits(at: root)
+            return try await lostAndDanglingCommits(
+                at: root,
+                offset: offset,
+                limit: limit
+            )
         }
 
         let revision: String?
+        let path: String?
         switch scope {
         case .all:
             revision = nil
+            path = nil
         case let .revision(value):
             revision = value
+            path = nil
+        case let .path(value):
+            revision = nil
+            path = value
         case .lostAndDangling:
             preconditionFailure("Handled above.")
         }
         let result = try await run(
-            Self.historyArguments(revision: revision),
+            Self.historyArguments(
+                revision: revision,
+                path: path,
+                offset: offset,
+                limit: limit
+            ),
             in: root
         )
         return GitParser.parseCommits(result.output)
     }
 
-    static func historyArguments(revision: String?) -> [String] {
-        [
+    static func historyArguments(
+        revision: String?,
+        path: String? = nil,
+        offset: Int = 0,
+        limit: Int = historyPageSize
+    ) -> [String] {
+        var arguments = [
             "log",
             "--topo-order",
-            "--max-count=300",
+            "--max-count=\(limit)",
             "--date=iso-strict",
-            "--pretty=format:\(unverifiedCommitFormat)",
-            revision ?? "--all"
+            "--pretty=format:\(unverifiedCommitFormat)"
         ]
+        if offset > 0 {
+            arguments.append("--skip=\(offset)")
+        }
+        arguments.append(revision ?? "--all")
+        if let path {
+            arguments.append("--")
+            arguments.append(":(literal)\(path)")
+        }
+        return arguments
     }
 
-    private func lostAndDanglingCommits(at root: URL) async throws -> [GitCommit] {
+    func repositoryPaths(at root: URL) async throws -> [RepositoryPathItem] {
+        let result = try await run(
+            ["ls-files", "--cached", "-z"],
+            in: root
+        )
+        return Self.parseRepositoryPathItems(result.output)
+    }
+
+    static func parseRepositoryPathItems(_ output: String) -> [RepositoryPathItem] {
+        let files = output
+            .split(separator: "\0", omittingEmptySubsequences: true)
+            .map(String.init)
+        var directories = Set<String>()
+
+        for file in files {
+            let components = file.split(
+                separator: "/",
+                omittingEmptySubsequences: false
+            )
+            guard components.count > 1 else { continue }
+            for end in 1..<components.count {
+                directories.insert(
+                    components[..<end].joined(separator: "/")
+                )
+            }
+        }
+
+        return (
+            directories.map {
+                RepositoryPathItem(path: $0, kind: .directory)
+            }
+            + files.map {
+                RepositoryPathItem(path: $0, kind: .file)
+            }
+        )
+        .sorted {
+            let order = $0.path.localizedStandardCompare($1.path)
+            if order != .orderedSame {
+                return order == .orderedAscending
+            }
+            return $0.kind == .directory && $1.kind == .file
+        }
+    }
+
+    private func lostAndDanglingCommits(
+        at root: URL,
+        offset: Int,
+        limit: Int
+    ) async throws -> [GitCommit] {
         let fsck = try await run(
             [
                 "fsck",
@@ -316,15 +417,19 @@ struct GitClient: Sendable {
         guard !hashes.isEmpty else { return [] }
 
         let revisions = hashes.joined(separator: "\n") + "\n--not\n--all\n"
+        var arguments = [
+            "log",
+            "--topo-order",
+            "--max-count=\(limit)",
+            "--date=iso-strict",
+            "--pretty=format:\(Self.unverifiedCommitFormat)",
+        ]
+        if offset > 0 {
+            arguments.append("--skip=\(offset)")
+        }
+        arguments.append("--stdin")
         let result = try await run(
-            [
-                "log",
-                "--topo-order",
-                "--max-count=300",
-                "--date=iso-strict",
-                "--pretty=format:\(Self.unverifiedCommitFormat)",
-                "--stdin"
-            ],
+            arguments,
             in: root,
             input: Data(revisions.utf8)
         )

@@ -5,7 +5,7 @@ struct HistoryView: View {
 
     var body: some View {
         let commits = store.filteredCommits
-        let showsGraph = store.historyScope != .lostAndDangling
+        let showsGraph = showsGraph(for: store.historyScope)
         let graph = showsGraph
             ? (store.searchText.isEmpty
                 ? CommitGraphLayout(commits: commits)
@@ -33,9 +33,7 @@ struct HistoryView: View {
             if commits.isEmpty {
                 ContentUnavailableView(
                     emptyTitle,
-                    systemImage: store.historyScope == .lostAndDangling
-                        ? "lifepreserver"
-                        : "clock",
+                    systemImage: emptySystemImage,
                     description: Text(emptyDescription)
                 )
             } else {
@@ -53,11 +51,35 @@ struct HistoryView: View {
                         )
                         .listRowSeparator(.hidden)
                     }
+
+                    if store.canLoadMoreHistory || store.isLoadingMoreHistory {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Loading more commits…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .padding(.vertical, 10)
+                        .listRowSeparator(.hidden)
+                        .onAppear {
+                            store.loadMoreHistory()
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
         }
-        .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search commits")
+        .toolbar {
+            ToolbarItem {
+                TextField("Search commits", text: $store.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                    .help("Filter the loaded commit history")
+            }
+        }
     }
 
     private var commitSelection: Binding<GitCommit?> {
@@ -71,29 +93,62 @@ struct HistoryView: View {
         if let reference = store.selectedReference {
             return reference.name
         }
-        if store.historyScope == .lostAndDangling {
+        switch store.historyScope {
+        case let .path(path):
+            return path
+        case .lostAndDangling:
             return "Unreachable Commits"
+        case .all, .revision:
+            return "All Commits"
         }
-        return "All Commits"
     }
 
     private var emptyTitle: String {
         if !store.searchText.isEmpty {
             return "No Matching Commits"
         }
-        return store.historyScope == .lostAndDangling
-            ? "No Unreachable Commits"
-            : "No Commits"
+        switch store.historyScope {
+        case .path:
+            return "No Path History"
+        case .lostAndDangling:
+            return "No Unreachable Commits"
+        case .all, .revision:
+            return "No Commits"
+        }
+    }
+
+    private var emptySystemImage: String {
+        switch store.historyScope {
+        case .path:
+            return "doc.text.magnifyingglass"
+        case .lostAndDangling:
+            return "lifepreserver"
+        case .all, .revision:
+            return "clock"
+        }
     }
 
     private var emptyDescription: String {
         if !store.searchText.isEmpty {
             return "No commits match your search."
         }
-        if store.historyScope == .lostAndDangling {
+        switch store.historyScope {
+        case let .path(path):
+            return "No commits affect “\(path)” in this repository’s current references."
+        case .lostAndDangling:
             return "No commits are unreachable from this repository’s current references."
+        case .all, .revision:
+            return "This repository has no commits yet."
         }
-        return "This repository has no commits yet."
+    }
+
+    private func showsGraph(for scope: CommitHistoryScope) -> Bool {
+        switch scope {
+        case .path, .lostAndDangling:
+            return false
+        case .all, .revision:
+            return true
+        }
     }
 }
 

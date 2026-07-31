@@ -17,10 +17,25 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
 enum CommitHistoryScope: Equatable, Sendable {
     case all
     case revision(String)
+    case path(String)
     case lostAndDangling
 
     init(revision: String?) {
         self = revision.map(Self.revision) ?? .all
+    }
+}
+
+struct RepositoryPathItem: Identifiable, Hashable, Sendable {
+    enum Kind: String, Sendable {
+        case directory
+        case file
+    }
+
+    let path: String
+    let kind: Kind
+
+    var id: String {
+        "\(kind.rawValue):\(path)"
     }
 }
 

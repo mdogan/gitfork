@@ -15,6 +15,8 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var stashes: [GitStash] = []
     @Published private(set) var worktrees: [GitWorktree] = []
     @Published private(set) var commits: [GitCommit] = []
+    @Published private(set) var canLoadMoreHistory = false
+    @Published private(set) var isLoadingMoreHistory = false
     @Published private(set) var diff = ""
     @Published private(set) var isLoading = false
     @Published private(set) var operationLabel: String?
@@ -39,11 +41,20 @@ final class RepositoryStore: ObservableObject {
     @Published var isConfirmingPush = false
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
+    @Published var isShowingPathHistoryPicker = false
+    @Published var isShowingKeyboardShortcuts = false
+    @Published private(set) var repositoryPathItems: [RepositoryPathItem] = []
+    @Published private(set) var isLoadingRepositoryPaths = false
     @Published private(set) var recentRepositories: [URL] = []
 
     private let client = GitClient()
     private var loadGeneration = 0
     private var detailTask: Task<Void, Never>?
+    private var historyPaginationTask: Task<Void, Never>?
+    private var historyPaginationID: UUID?
+    private var historyNextOffset = 0
+    private var repositoryPathTask: Task<Void, Never>?
+    private var repositoryPathLoadID: UUID?
     private var monitorTask: Task<Void, Never>?
     private var monitoredState: RepositoryStateToken?
     private var isMonitoringActive = true
@@ -53,10 +64,16 @@ final class RepositoryStore: ObservableObject {
     private var cachedVerifiedCommit: GitCommit?
     private let recentKey = "recentRepositories"
     private let monitorInterval: Duration
+    private let historyPageSize: Int
     private static let signCommitKey = "signCommitsWithGPG"
 
-    init(monitorInterval: Duration = .seconds(2)) {
+    init(
+        monitorInterval: Duration = .seconds(2),
+        historyPageSize: Int = GitClient.historyPageSize
+    ) {
+        precondition(historyPageSize > 0)
         self.monitorInterval = monitorInterval
+        self.historyPageSize = historyPageSize
         signCommit = UserDefaults.standard.bool(forKey: Self.signCommitKey)
         recentRepositories = (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
@@ -114,6 +131,44 @@ final class RepositoryStore: ObservableObject {
         openRepository(url)
     }
 
+    func showPathHistoryPicker() {
+        guard let root = repositoryURL else { return }
+        isShowingPathHistoryPicker = true
+        repositoryPathTask?.cancel()
+
+        let loadID = UUID()
+        repositoryPathLoadID = loadID
+        isLoadingRepositoryPaths = true
+        repositoryPathTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.repositoryPathLoadID == loadID {
+                    self.repositoryPathLoadID = nil
+                    self.repositoryPathTask = nil
+                    self.isLoadingRepositoryPaths = false
+                }
+            }
+
+            do {
+                let items = try await self.client.repositoryPaths(at: root)
+                try Task.checkCancellation()
+                guard self.isCurrentRepository(root),
+                      self.repositoryPathLoadID == loadID else {
+                    return
+                }
+                self.repositoryPathItems = items
+            } catch is CancellationError {
+                // A newer picker load or repository switch superseded this load.
+            } catch {
+                guard self.isCurrentRepository(root),
+                      self.repositoryPathLoadID == loadID else {
+                    return
+                }
+                self.show(error)
+            }
+        }
+    }
+
     func openRepository(_ url: URL) {
         _ = startOperation("Opening repository") {
             let root = try await self.client.repositoryRoot(from: url)
@@ -145,6 +200,7 @@ final class RepositoryStore: ObservableObject {
     }
 
     func selectChanges() {
+        cancelHistoryPagination()
         selectedSection = .changes
         historyScope = .all
         selectedReference = nil
@@ -323,6 +379,7 @@ final class RepositoryStore: ObservableObject {
 
     func selectReference(_ reference: GitReference?) {
         guard let root = repositoryURL else { return }
+        cancelHistoryPagination()
         _ = startOperation("Loading \(reference?.name ?? "history")") {
             self.selectedStash = nil
             self.selectedReference = reference
@@ -334,6 +391,7 @@ final class RepositoryStore: ObservableObject {
 
     func selectLostAndDanglingCommits() {
         guard let root = repositoryURL else { return }
+        cancelHistoryPagination()
         _ = startOperation("Loading unreachable commits") {
             self.selectedStash = nil
             self.selectedReference = nil
@@ -343,8 +401,24 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func selectPathHistory(_ proposedPath: String) {
+        guard let root = repositoryURL,
+              let path = RepositoryPathSelection.normalizedSelection(proposedPath) else {
+            return
+        }
+        cancelHistoryPagination()
+        _ = startOperation("Loading history for \(path)") {
+            self.selectedStash = nil
+            self.selectedReference = nil
+            self.selectedSection = .history
+            self.historyScope = .path(path)
+            try await self.reloadHistory(root: root, scope: self.historyScope)
+        }
+    }
+
     func selectStash(_ stash: GitStash) {
         guard let root = repositoryURL else { return }
+        cancelHistoryPagination()
         _ = startOperation("Loading \(stash.displayName)") {
             self.selectedStash = stash
             self.selectedReference = nil
@@ -725,10 +799,12 @@ final class RepositoryStore: ObservableObject {
         root: URL,
         historyScope: CommitHistoryScope
     ) async throws {
+        cancelHistoryPagination(resetState: false)
         let previousChangeOrder = changeOrder
         let load = try await client.snapshotAndStateToken(
             at: root,
-            historyScope: historyScope
+            historyScope: historyScope,
+            historyLimit: historyPageSize
         )
         try Task.checkCancellation()
         guard isCurrentRepository(root) else { return }
@@ -743,7 +819,7 @@ final class RepositoryStore: ObservableObject {
         references = snapshot.references
         stashes = snapshot.stashes
         worktrees = snapshot.worktrees
-        commits = snapshot.commits
+        replaceHistory(snapshot.commits)
 
         if let selectedStash,
            let replacement = stashes.first(where: { $0.id == selectedStash.id }) {
@@ -788,13 +864,15 @@ final class RepositoryStore: ObservableObject {
         root: URL,
         scope: CommitHistoryScope
     ) async throws {
+        cancelHistoryPagination()
         let loadedCommits = try await client.history(
             at: root,
-            scope: scope
+            scope: scope,
+            limit: historyPageSize
         )
         try Task.checkCancellation()
         guard isCurrentRepository(root) else { return }
-        commits = loadedCommits
+        replaceHistory(loadedCommits)
         if let selectedCommit,
            let replacement = commits.first(where: { $0.hash == selectedCommit.hash }) {
             self.selectedCommit = replacement
@@ -802,6 +880,88 @@ final class RepositoryStore: ObservableObject {
             selectedCommit = commits.first
         }
         showCommit(selectedCommit)
+    }
+
+    func loadMoreHistory() {
+        guard selectedSection == .history,
+              let root = repositoryURL,
+              canLoadMoreHistory,
+              !isLoading,
+              !isLoadingMoreHistory else {
+            return
+        }
+
+        let scope = historyScope
+        let offset = historyNextOffset
+        let paginationID = UUID()
+        historyPaginationID = paginationID
+        isLoadingMoreHistory = true
+        historyPaginationTask = Task { [weak self] in
+            guard let self else { return }
+            await self.loadHistoryPage(
+                root: root,
+                scope: scope,
+                offset: offset,
+                paginationID: paginationID
+            )
+        }
+    }
+
+    private func loadHistoryPage(
+        root: URL,
+        scope: CommitHistoryScope,
+        offset: Int,
+        paginationID: UUID
+    ) async {
+        defer {
+            if historyPaginationID == paginationID {
+                historyPaginationID = nil
+                historyPaginationTask = nil
+                isLoadingMoreHistory = false
+            }
+        }
+
+        do {
+            let page = try await client.history(
+                at: root,
+                scope: scope,
+                offset: offset,
+                limit: historyPageSize
+            )
+            try Task.checkCancellation()
+            guard isCurrentRepository(root),
+                  historyScope == scope,
+                  historyNextOffset == offset else {
+                return
+            }
+
+            historyNextOffset += page.count
+            let existingHashes = Set(commits.map(\.hash))
+            commits.append(contentsOf: page.filter { !existingHashes.contains($0.hash) })
+            canLoadMoreHistory = page.count == historyPageSize
+        } catch is CancellationError {
+            // A scope change or full refresh superseded this page.
+        } catch {
+            guard isCurrentRepository(root), historyScope == scope else { return }
+            show(error)
+        }
+    }
+
+    private func replaceHistory(_ loadedCommits: [GitCommit]) {
+        commits = loadedCommits
+        historyNextOffset = loadedCommits.count
+        canLoadMoreHistory = loadedCommits.count == historyPageSize
+    }
+
+    private func cancelHistoryPagination(resetState: Bool = true) {
+        historyPaginationTask?.cancel()
+        historyPaginationTask = nil
+        historyPaginationID = nil
+        isLoadingMoreHistory = false
+        if resetState {
+            canLoadMoreHistory = false
+            historyNextOffset = 0
+        }
     }
 
     /// Carries the change selection across a refresh while keeping the primary
@@ -874,6 +1034,13 @@ final class RepositoryStore: ObservableObject {
     }
 
     private func prepareForRepositorySwitch() {
+        cancelHistoryPagination()
+        repositoryPathTask?.cancel()
+        repositoryPathTask = nil
+        repositoryPathLoadID = nil
+        repositoryPathItems = []
+        isLoadingRepositoryPaths = false
+        isShowingPathHistoryPicker = false
         detailTask?.cancel()
         detailTask = nil
         loadGeneration += 1

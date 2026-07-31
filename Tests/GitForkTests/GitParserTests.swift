@@ -900,14 +900,198 @@ struct GitParserTests {
     @Test
     func buildsHistoryArgumentsWithoutSignatureVerification() {
         let allHistory = GitClient.historyArguments(revision: nil)
-        let branchHistory = GitClient.historyArguments(revision: "refs/heads/main")
+        let branchHistory = GitClient.historyArguments(
+            revision: "refs/heads/main",
+            offset: GitClient.historyPageSize
+        )
+        let pathHistory = GitClient.historyArguments(
+            revision: nil,
+            path: "Sources/-odd name.swift"
+        )
 
         #expect(allHistory.last == "--all")
         #expect(branchHistory.last == "refs/heads/main")
+        #expect(
+            Array(pathHistory.suffix(3))
+                == ["--all", "--", ":(literal)Sources/-odd name.swift"]
+        )
         #expect(allHistory.contains("--topo-order"))
+        #expect(allHistory.contains("--max-count=300"))
+        #expect(!allHistory.contains { $0.hasPrefix("--skip=") })
+        #expect(branchHistory.contains("--skip=300"))
         #expect(!allHistory.joined().contains("%G?"))
         #expect(!allHistory.joined().contains("%GK"))
         #expect(!allHistory.joined().contains("%GS"))
+    }
+
+    @Test
+    func loadsHistoryForAFileOrDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkPathHistoryTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Docs"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Sources"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try "first\n".write(
+            to: root.appendingPathComponent("Docs/Guide.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "app\n".write(
+            to: root.appendingPathComponent("Sources/App.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "--", "Docs/Guide.md", "Sources/App.swift"], at: root)
+        try runGit(["commit", "-m", "Initial paths"], at: root)
+
+        try "second\n".write(
+            to: root.appendingPathComponent("Docs/Guide.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "--", "Docs/Guide.md"], at: root)
+        try runGit(["commit", "-m", "Update guide"], at: root)
+
+        try "updated app\n".write(
+            to: root.appendingPathComponent("Sources/App.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "--", "Sources/App.swift"], at: root)
+        try runGit(["commit", "-m", "Update app"], at: root)
+
+        try runGit(["rm", "--", "Docs/Guide.md"], at: root)
+        try runGit(["commit", "-m", "Delete guide"], at: root)
+
+        let client = GitClient()
+        let directoryHistory = try await client.history(
+            at: root,
+            scope: .path("Docs")
+        )
+        let fileHistory = try await client.history(
+            at: root,
+            scope: .path("Docs/Guide.md")
+        )
+
+        #expect(
+            directoryHistory.map(\.subject)
+                == ["Delete guide", "Update guide", "Initial paths"]
+        )
+        #expect(fileHistory.map(\.subject) == directoryHistory.map(\.subject))
+        #expect(directoryHistory.allSatisfy { $0.signature.status == .none })
+    }
+
+    @Test
+    func loadsHistoryInNonOverlappingPages() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkHistoryPaginationTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        for number in 1...5 {
+            try runGit(
+                ["commit", "--allow-empty", "-m", "Commit \(number)"],
+                at: root
+            )
+        }
+
+        let client = GitClient()
+        let firstPage = try await client.history(at: root, offset: 0, limit: 2)
+        let secondPage = try await client.history(at: root, offset: 2, limit: 2)
+        let finalPage = try await client.history(at: root, offset: 4, limit: 2)
+
+        #expect(firstPage.map(\.subject) == ["Commit 5", "Commit 4"])
+        #expect(secondPage.map(\.subject) == ["Commit 3", "Commit 2"])
+        #expect(finalPage.map(\.subject) == ["Commit 1"])
+        #expect(Set((firstPage + secondPage + finalPage).map(\.hash)).count == 5)
+    }
+
+    @Test
+    @MainActor
+    func storeAppendsHistoryPagesUntilTheEnd() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkHistoryStoreTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        for number in 1...5 {
+            try runGit(
+                ["commit", "--allow-empty", "-m", "Commit \(number)"],
+                at: root
+            )
+        }
+
+        let store = RepositoryStore(historyPageSize: 2)
+        store.setMonitoringActive(false)
+        store.openRepository(root)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(store.commits.map(\.subject) == ["Commit 5", "Commit 4"])
+        #expect(store.canLoadMoreHistory)
+
+        store.loadMoreHistory()
+        for _ in 0..<500 {
+            guard store.isLoadingMoreHistory else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(
+            store.commits.map(\.subject)
+                == ["Commit 5", "Commit 4", "Commit 3", "Commit 2"]
+        )
+        #expect(store.canLoadMoreHistory)
+
+        store.loadMoreHistory()
+        for _ in 0..<500 {
+            guard store.isLoadingMoreHistory else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(
+            store.commits.map(\.subject)
+                == ["Commit 5", "Commit 4", "Commit 3", "Commit 2", "Commit 1"]
+        )
+        #expect(!store.canLoadMoreHistory)
+
+        let main = try #require(
+            store.references.first {
+                $0.fullName == "refs/heads/main"
+            }
+        )
+        store.selectReference(main)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.commits.map(\.subject) == ["Commit 5", "Commit 4"])
+        #expect(store.canLoadMoreHistory)
+
+        store.loadMoreHistory()
+        for _ in 0..<500 {
+            guard store.isLoadingMoreHistory else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(
+            store.commits.map(\.subject)
+                == ["Commit 5", "Commit 4", "Commit 3", "Commit 2"]
+        )
     }
 
     @Test

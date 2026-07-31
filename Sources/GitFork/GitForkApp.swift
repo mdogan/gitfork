@@ -34,6 +34,18 @@ struct GitForkApp: App {
                 }
                 .keyboardShortcut("k")
 
+                Button("File or Directory History…") {
+                    store.showPathHistoryPicker()
+                }
+                .keyboardShortcut("f")
+                .disabled(store.repositoryURL == nil)
+
+                Button("Changes") {
+                    store.selectChanges()
+                }
+                .keyboardShortcut("p")
+                .disabled(store.repositoryURL == nil)
+
                 Divider()
 
                 Button("Refresh") { store.refresh() }
@@ -46,6 +58,12 @@ struct GitForkApp: App {
                     .disabled(store.repositoryURL == nil || store.isLoading)
                 Button("Push") { store.requestPushConfirmation() }
                     .disabled(store.repositoryURL == nil || store.isLoading)
+            }
+
+            CommandGroup(after: .help) {
+                Button("Keyboard Shortcuts…") {
+                    store.isShowingKeyboardShortcuts = true
+                }
             }
         }
 
@@ -93,6 +111,13 @@ struct RootView: View {
         .sheet(isPresented: $store.isShowingRepositorySwitcher) {
             RepositorySwitcherSheet()
                 .environmentObject(store)
+        }
+        .sheet(isPresented: $store.isShowingPathHistoryPicker) {
+            PathHistoryPickerSheet()
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $store.isShowingKeyboardShortcuts) {
+            KeyboardShortcutsView()
         }
         .alert(
             "GitFork",

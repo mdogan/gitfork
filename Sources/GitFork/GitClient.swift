@@ -113,7 +113,10 @@ struct GitClient: Sendable {
     ]
     private static let referenceArguments = [
         "for-each-ref",
-        "--format=%(refname)%1f%(objectname:short)%1f%(objectname)%1f%(upstream)%1f%(upstream:track)",
+        """
+        --format=%(refname)%1f%(objectname:short)%1f%(objectname)%1f%(upstream)%1f\
+        %(upstream:short)%1f%(upstream:remotename)%1f%(upstream:remoteref)%1f%(upstream:track)
+        """,
         "refs/heads", "refs/remotes", "refs/tags"
     ]
     private static let stashArguments = [
@@ -908,6 +911,35 @@ struct GitClient: Sendable {
         )
     }
 
+    func deleteRemoteBranch(at root: URL, upstream: GitUpstream) async throws {
+        _ = try await run(
+            Self.deleteRemoteBranchArguments(for: upstream),
+            in: root
+        )
+    }
+
+    static func deleteRemoteBranchArguments(for upstream: GitUpstream) throws -> [String] {
+        guard !upstream.remote.isEmpty,
+              upstream.remoteRef.hasPrefix("refs/heads/") else {
+            throw GitOperationError(
+                command: "git push --delete",
+                message: """
+                \(upstream.shortName) does not name a branch on a remote, so GitFork \
+                cannot delete it.
+                """
+            )
+        }
+        return [
+            "-c",
+            "remote.\(upstream.remote).mirror=false",
+            "push",
+            "--delete",
+            "--",
+            upstream.remote,
+            upstream.remoteRef
+        ]
+    }
+
     static func deleteArguments(for reference: GitReference) throws -> [String] {
         switch reference.kind {
         case .localBranch:
@@ -923,7 +955,10 @@ struct GitClient: Sendable {
         case .remoteBranch:
             throw GitOperationError(
                 command: "git branch --delete",
-                message: "Deleting remote branches is not supported."
+                message: """
+                \(reference.name) lives on a remote. Use Delete Remote Branch to \
+                remove it with git push --delete.
+                """
             )
         }
     }

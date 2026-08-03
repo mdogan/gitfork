@@ -369,6 +369,161 @@ struct GitParserTests {
     }
 
     @Test
+    func parsesUpstreamTrackingOfLocalBranches() throws {
+        let tracked = [
+            "refs/heads/feature/api",
+            "abc",
+            "abcdef",
+            "refs/remotes/origin/feature/api",
+            "origin/feature/api",
+            "origin",
+            "refs/heads/feature/api",
+            "[ahead 1]"
+        ].joined(separator: "\u{1f}")
+        let untracked = [
+            "refs/heads/local-only",
+            "def",
+            "defdef",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ].joined(separator: "\u{1f}")
+        let remote = [
+            "refs/remotes/origin/feature/api",
+            "abc",
+            "abcdef",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ].joined(separator: "\u{1f}")
+
+        let references = GitParser.parseReferences(
+            [tracked, untracked, remote].joined(separator: "\n"),
+            currentBranch: "feature/api"
+        )
+
+        let upstream = try #require(
+            references.first { $0.name == "feature/api" && $0.kind == .localBranch }?.upstream
+        )
+        #expect(upstream.fullName == "refs/remotes/origin/feature/api")
+        #expect(upstream.shortName == "origin/feature/api")
+        #expect(upstream.remote == "origin")
+        #expect(upstream.remoteRef == "refs/heads/feature/api")
+        #expect(references.first { $0.name == "local-only" }?.upstream == nil)
+        #expect(references.first { $0.kind == .remoteBranch }?.upstream == nil)
+    }
+
+    @Test
+    func omitsUpstreamWhenReferenceRecordPredatesUpstreamFields() {
+        let references = GitParser.parseReferences(
+            "refs/heads/main\u{1f}abc\u{1f}abcdef",
+            currentBranch: "main"
+        )
+
+        #expect(references.first?.upstream == nil)
+    }
+
+    @Test
+    func buildsRemoteBranchDeletionArguments() throws {
+        let arguments = try GitClient.deleteRemoteBranchArguments(
+            for: GitUpstream(
+                fullName: "refs/remotes/origin/feature/api",
+                shortName: "origin/feature/api",
+                remote: "origin",
+                remoteRef: "refs/heads/feature/api"
+            )
+        )
+
+        #expect(
+            arguments == [
+                "-c",
+                "remote.origin.mirror=false",
+                "push",
+                "--delete",
+                "--",
+                "origin",
+                "refs/heads/feature/api"
+            ]
+        )
+    }
+
+    @Test
+    func derivesRemoteBranchTargetFromRemoteTrackingReference() throws {
+        let remoteBranch = GitReference(
+            name: "origin/feature/api",
+            fullName: "refs/remotes/origin/feature/api",
+            kind: .remoteBranch,
+            target: "aaaaaa",
+            isCurrent: false
+        )
+
+        let target = try #require(remoteBranch.remoteBranchTarget)
+        #expect(target.remote == "origin")
+        #expect(target.remoteRef == "refs/heads/feature/api")
+        #expect(target.shortName == "origin/feature/api")
+        #expect(target.fullName == "refs/remotes/origin/feature/api")
+        #expect(
+            try GitClient.deleteRemoteBranchArguments(for: target) == [
+                "-c",
+                "remote.origin.mirror=false",
+                "push",
+                "--delete",
+                "--",
+                "origin",
+                "refs/heads/feature/api"
+            ]
+        )
+    }
+
+    @Test
+    func withholdsRemoteBranchTargetFromLocalAndUnqualifiedReferences() {
+        let localBranch = GitReference(
+            name: "feature/api",
+            fullName: "refs/heads/feature/api",
+            kind: .localBranch,
+            target: "aaaaaa",
+            isCurrent: false
+        )
+        let tag = GitReference(
+            name: "v1.0",
+            fullName: "refs/tags/v1.0",
+            kind: .tag,
+            target: "bbbbbb",
+            isCurrent: false
+        )
+        // A ref directly beneath refs/remotes/ names no branch on any remote.
+        let unqualified = GitReference(
+            name: "origin",
+            fullName: "refs/remotes/origin",
+            kind: .remoteBranch,
+            target: "cccccc",
+            isCurrent: false
+        )
+
+        #expect(localBranch.remoteBranchTarget == nil)
+        #expect(tag.remoteBranchTarget == nil)
+        #expect(unqualified.remoteBranchTarget == nil)
+    }
+
+    @Test
+    func rejectsRemoteDeletionOfNonBranchUpstream() {
+        #expect(throws: GitOperationError.self) {
+            try GitClient.deleteRemoteBranchArguments(
+                for: GitUpstream(
+                    fullName: "refs/remotes/origin/v1.0",
+                    shortName: "origin/v1.0",
+                    remote: "origin",
+                    remoteRef: "refs/tags/v1.0"
+                )
+            )
+        }
+    }
+
+    @Test
     func buildsSlashDelimitedReferenceTree() throws {
         let references = [
             GitReference(
@@ -1900,6 +2055,112 @@ struct GitParserTests {
                 ["tag", "--list", "v-delete-me"],
                 at: root
             )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
+    }
+
+    @Test
+    func deletesTrackedRemoteBranchAlongsideLocalBranch() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkDeleteRemoteBranchTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let remote = container.appendingPathComponent("remote.git")
+        let root = container.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try runGit(["init", "--bare", "-b", "main"], at: remote)
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["remote", "add", "origin", remote.path], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "# Delete remote branch\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try runGit(["push", "-u", "origin", "main"], at: root)
+        try runGit(["switch", "-c", "feature/remote-delete"], at: root)
+        try runGit(["push", "-u", "origin", "feature/remote-delete"], at: root)
+        try runGit(["switch", "main"], at: root)
+
+        let client = GitClient()
+        let snapshot = try await client.snapshot(at: root)
+        let reference = try #require(
+            snapshot.references.first {
+                $0.kind == .localBranch && $0.name == "feature/remote-delete"
+            }
+        )
+        let upstream = try #require(reference.upstream)
+        #expect(upstream.shortName == "origin/feature/remote-delete")
+
+        try await client.delete(at: root, reference: reference)
+        try await client.deleteRemoteBranch(at: root, upstream: upstream)
+
+        #expect(
+            try runGitOutput(["branch", "--list", reference.name], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+        )
+        #expect(
+            try runGitOutput(["ls-remote", "--heads", "origin"], at: root)
+                .contains("refs/heads/main")
+        )
+        #expect(
+            !(try runGitOutput(["ls-remote", "--heads", "origin"], at: root)
+                .contains("refs/heads/feature/remote-delete"))
+        )
+    }
+
+    @Test
+    func deletesRemoteBranchWithoutALocalCounterpart() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkDeleteRemoteOnlyTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let remote = container.appendingPathComponent("remote.git")
+        let root = container.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try runGit(["init", "--bare", "-b", "main"], at: remote)
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["remote", "add", "origin", remote.path], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "# Delete remote only\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try runGit(["push", "-u", "origin", "main"], at: root)
+        try runGit(["switch", "-c", "feature/remote-only"], at: root)
+        try runGit(["push", "-u", "origin", "feature/remote-only"], at: root)
+        try runGit(["switch", "main"], at: root)
+        // Leave only the remote-tracking ref behind, as a fetched branch that
+        // was never checked out would appear.
+        try runGit(["branch", "-D", "feature/remote-only"], at: root)
+
+        let client = GitClient()
+        let snapshot = try await client.snapshot(at: root)
+        let reference = try #require(
+            snapshot.references.first {
+                $0.kind == .remoteBranch && $0.name == "origin/feature/remote-only"
+            }
+        )
+        let target = try #require(reference.remoteBranchTarget)
+
+        try await client.deleteRemoteBranch(at: root, upstream: target)
+
+        let heads = try runGitOutput(["ls-remote", "--heads", "origin"], at: root)
+        #expect(heads.contains("refs/heads/main"))
+        #expect(!heads.contains("refs/heads/feature/remote-only"))
+        #expect(
+            try runGitOutput(["branch", "--remotes", "--list", reference.name], at: root)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
         )

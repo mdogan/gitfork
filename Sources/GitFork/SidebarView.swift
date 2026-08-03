@@ -522,7 +522,7 @@ private struct ReferenceSidebarRow: View {
             }
             .disabled(store.isLoading)
 
-            if reference.kind != .remoteBranch {
+            if reference.kind != .remoteBranch || remoteBranchTarget != nil {
                 Divider()
                 Button(role: .destructive) {
                     isConfirmingDelete = true
@@ -537,13 +537,35 @@ private struct ReferenceSidebarRow: View {
             isPresented: deleteConfirmationBinding,
             titleVisibility: .visible
         ) {
-            if isConfirmingForceDelete {
-                Button("Force Delete Branch", role: .destructive) {
+            if let remoteBranchTarget {
+                Button("Delete from \(remoteBranchTarget.remote)", role: .destructive) {
+                    store.deleteRemoteBranch(reference)
+                }
+                .disabled(store.isLoading)
+            } else if isConfirmingForceDelete {
+                if let remoteBranch {
+                    Button(
+                        "Force Delete Branch and \(remoteBranch.shortName)",
+                        role: .destructive
+                    ) {
+                        store.forceDelete(reference, includingRemote: true)
+                    }
+                    .disabled(store.isLoading)
+                }
+                Button(forceDeleteActionTitle, role: .destructive) {
                     store.forceDelete(reference)
                 }
                 .disabled(store.isLoading)
             } else {
-                Button(deleteActionTitle, role: .destructive) {
+                if let remoteBranch {
+                    Button(
+                        "Delete Branch and \(remoteBranch.shortName)",
+                        role: .destructive
+                    ) {
+                        store.delete(reference, includingRemote: true)
+                    }
+                }
+                Button(localOnlyDeleteActionTitle, role: .destructive) {
                     store.delete(reference)
                 }
             }
@@ -553,8 +575,32 @@ private struct ReferenceSidebarRow: View {
         }
     }
 
+    /// The remote-tracking branch this row can offer to delete alongside the
+    /// local branch, when one still exists.
+    private var remoteBranch: GitUpstream? {
+        store.deletableRemoteBranch(for: reference)
+    }
+
+    /// Set only on `Remotes` rows, where deletion targets the branch on the
+    /// remote itself rather than anything local.
+    private var remoteBranchTarget: GitUpstream? {
+        reference.remoteBranchTarget
+    }
+
     private var deleteActionTitle: String {
-        reference.kind == .tag ? "Delete Tag" : "Delete Branch"
+        switch reference.kind {
+        case .tag: "Delete Tag"
+        case .remoteBranch: "Delete Remote Branch"
+        case .localBranch: "Delete Branch"
+        }
+    }
+
+    private var localOnlyDeleteActionTitle: String {
+        remoteBranch == nil ? deleteActionTitle : "Delete Local Branch Only"
+    }
+
+    private var forceDeleteActionTitle: String {
+        remoteBranch == nil ? "Force Delete Branch" : "Force Delete Local Branch Only"
     }
 
     private var isConfirmingForceDelete: Bool {
@@ -582,16 +628,46 @@ private struct ReferenceSidebarRow: View {
     }
 
     private var deleteConfirmationMessage: String {
+        if let remoteBranchTarget {
+            return """
+            This deletes the branch from \(remoteBranchTarget.remote) for everyone \
+            using that remote.\(trackingBranchMessageSuffix)
+            """
+        }
         if isConfirmingForceDelete {
             return """
             Git reports that this branch contains commits that are not fully merged. \
-            Force deleting it runs git branch -D and may permanently discard those commits.
+            Force deleting it runs git branch -D and may permanently discard those commits.\
+            \(remoteBranchMessageSuffix)
             """
         }
         if reference.kind == .tag {
             return "This deletes the local tag. It does not delete the tag from any remote."
         }
-        return "This deletes the local branch. Git will refuse if it contains unmerged commits."
+        return """
+        This deletes the local branch. Git will refuse if it contains unmerged commits.\
+        \(remoteBranchMessageSuffix)
+        """
+    }
+
+    private var remoteBranchMessageSuffix: String {
+        guard let remoteBranch else { return "" }
+        return " " + """
+        This branch tracks \(remoteBranch.shortName), which can be deleted from \
+        \(remoteBranch.remote) at the same time.
+        """
+    }
+
+    /// Names the local branches left with an upstream that no longer resolves
+    /// once the remote branch is gone.
+    private var trackingBranchMessageSuffix: String {
+        let tracking = store.localBranchesTracking(reference).map(\.name)
+        guard !tracking.isEmpty else { return "" }
+        let names = tracking.map { "“\($0)”" }.formatted(.list(type: .and))
+        if tracking.count == 1 {
+            return " The local branch \(names) keeps its commits but loses its upstream."
+        }
+        return " The local branches \(names) keep their commits but lose their upstream."
     }
 }
 

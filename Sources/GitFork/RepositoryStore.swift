@@ -668,9 +668,27 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
-    func delete(_ reference: GitReference) {
+    /// The remote-tracking branch that can be deleted along with `reference`.
+    /// Returns `nil` when the branch has no upstream, or when its remote-tracking
+    /// ref is already gone locally, in which case the remote branch is either
+    /// gone too or unknown to this repository until the next fetch.
+    func deletableRemoteBranch(for reference: GitReference) -> GitUpstream? {
+        guard reference.kind == .localBranch,
+              let upstream = reference.upstream else {
+            return nil
+        }
+        let isTracked = references.contains {
+            $0.kind == .remoteBranch && $0.fullName == upstream.fullName
+        }
+        return isTracked ? upstream : nil
+    }
+
+    func delete(_ reference: GitReference, includingRemote: Bool = false) {
         let kind = reference.kind == .tag ? "tag" : "branch"
-        mutate("Deleting \(kind) \(reference.name)") { root in
+        let upstream = includingRemote ? deletableRemoteBranch(for: reference) : nil
+        let label = upstream.map { "Deleting branch \(reference.name) and \($0.shortName)" }
+            ?? "Deleting \(kind) \(reference.name)"
+        mutate(label) { root in
             do {
                 try await self.client.delete(at: root, reference: reference)
             } catch let error as UnmergedBranchDeletionError {
@@ -680,27 +698,79 @@ final class RepositoryStore: ObservableObject {
                 self.branchPendingForceDelete = reference
                 return
             }
-            if self.selectedReference == reference {
-                self.selectedReference = nil
-                self.historyScope = .all
-            }
+            try await self.deleteRemoteBranch(upstream, at: root, after: reference)
+            self.clearSelection(of: reference)
         }
     }
 
-    func forceDelete(_ reference: GitReference) {
+    func forceDelete(_ reference: GitReference, includingRemote: Bool = false) {
         guard branchPendingForceDelete == reference, !isLoading else { return }
         branchPendingForceDelete = nil
-        mutate("Force deleting branch \(reference.name)") { root in
+        let upstream = includingRemote ? deletableRemoteBranch(for: reference) : nil
+        let label = upstream.map { "Force deleting branch \(reference.name) and \($0.shortName)" }
+            ?? "Force deleting branch \(reference.name)"
+        mutate(label) { root in
             try await self.client.forceDelete(at: root, reference: reference)
-            if self.selectedReference == reference {
-                self.selectedReference = nil
-                self.historyScope = .all
-            }
+            try await self.deleteRemoteBranch(upstream, at: root, after: reference)
+            self.clearSelection(of: reference)
         }
     }
 
     func cancelForceDelete() {
         branchPendingForceDelete = nil
+    }
+
+    /// Local branches whose upstream is `reference`. Deleting the remote branch
+    /// leaves their tracking configuration pointing at a ref that is gone.
+    func localBranchesTracking(_ reference: GitReference) -> [GitReference] {
+        guard reference.kind == .remoteBranch else { return [] }
+        return references.filter {
+            $0.kind == .localBranch && $0.upstream?.fullName == reference.fullName
+        }
+    }
+
+    /// Deletes a branch from its remote directly, without requiring a local
+    /// branch that tracks it. Git removes the remote-tracking ref on success.
+    func deleteRemoteBranch(_ reference: GitReference) {
+        guard let upstream = reference.remoteBranchTarget else {
+            errorMessage = """
+            \(reference.name) does not name a branch on a remote, so GitFork \
+            cannot delete it.
+            """
+            return
+        }
+        mutate("Deleting \(upstream.shortName) from \(upstream.remote)") { root in
+            try await self.client.deleteRemoteBranch(at: root, upstream: upstream)
+            self.clearSelection(of: reference)
+        }
+    }
+
+    /// Deletes the remote branch after its local branch is gone. A failure here
+    /// must name the local deletion that already succeeded, because the two
+    /// halves of the operation cannot be rolled back together.
+    private func deleteRemoteBranch(
+        _ upstream: GitUpstream?,
+        at root: URL,
+        after reference: GitReference
+    ) async throws {
+        guard let upstream else { return }
+        do {
+            try await client.deleteRemoteBranch(at: root, upstream: upstream)
+        } catch let error as GitOperationError {
+            throw GitOperationError(
+                command: error.command,
+                message: """
+                Deleted the local branch \(reference.name), but deleting \
+                \(upstream.shortName) failed. \(error.message)
+                """
+            )
+        }
+    }
+
+    private func clearSelection(of reference: GitReference) {
+        guard selectedReference == reference else { return }
+        selectedReference = nil
+        historyScope = .all
     }
 
     func delete(_ worktree: GitWorktree) {

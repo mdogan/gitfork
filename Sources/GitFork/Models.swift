@@ -70,14 +70,65 @@ enum ReferenceKind: String, Sendable {
     }
 }
 
+/// The remote-tracking branch configured for a local branch through
+/// `branch.<name>.remote` and `branch.<name>.merge`.
+struct GitUpstream: Hashable, Sendable {
+    /// The local remote-tracking ref, such as `refs/remotes/origin/feature`.
+    let fullName: String
+    /// The display form, such as `origin/feature`.
+    let shortName: String
+    /// The remote name, such as `origin`.
+    let remote: String
+    /// The ref as it exists on the remote, such as `refs/heads/feature`.
+    let remoteRef: String
+}
+
 struct GitReference: Identifiable, Hashable, Sendable {
     let name: String
     let fullName: String
     let kind: ReferenceKind
     let target: String
     let isCurrent: Bool
+    let upstream: GitUpstream?
+
+    init(
+        name: String,
+        fullName: String,
+        kind: ReferenceKind,
+        target: String,
+        isCurrent: Bool,
+        upstream: GitUpstream? = nil
+    ) {
+        self.name = name
+        self.fullName = fullName
+        self.kind = kind
+        self.target = target
+        self.isCurrent = isCurrent
+        self.upstream = upstream
+    }
 
     var id: String { fullName }
+
+    /// The branch on the remote that this remote-tracking ref stands for, such
+    /// as `refs/heads/feature` on `origin` for `refs/remotes/origin/feature`.
+    /// The first path component names the remote, matching how Git lays out
+    /// `refs/remotes/`. Returns `nil` for anything that does not name a branch
+    /// beneath a remote.
+    var remoteBranchTarget: GitUpstream? {
+        guard kind == .remoteBranch,
+              let separator = name.firstIndex(of: "/") else {
+            return nil
+        }
+        let remote = String(name[..<separator])
+        let branch = String(name[name.index(after: separator)...])
+        guard !remote.isEmpty, !branch.isEmpty else { return nil }
+        return GitUpstream(
+            fullName: fullName,
+            shortName: name,
+            remote: remote,
+            remoteRef: "refs/heads/\(branch)"
+        )
+    }
 
     static func primaryLocalBranch(in references: [GitReference]) -> GitReference? {
         references.first { $0.kind == .localBranch && $0.name == "main" }
@@ -512,7 +563,8 @@ enum GitParser {
                 fullName: fullName,
                 kind: kind,
                 target: fields[2],
-                isCurrent: kind == .localBranch && name == currentBranch
+                isCurrent: kind == .localBranch && name == currentBranch,
+                upstream: kind == .localBranch ? upstream(from: fields) : nil
             )
         }
         .sorted {
@@ -521,6 +573,28 @@ enum GitParser {
             }
             return $0.kind.rawValue < $1.kind.rawValue
         }
+    }
+
+    /// Reads the `%(upstream...)` fields of a `for-each-ref` record. Git leaves
+    /// them empty for branches without tracking configuration.
+    private static func upstream(from fields: [String]) -> GitUpstream? {
+        guard fields.count >= 7 else { return nil }
+        let fullName = fields[3]
+        let shortName = fields[4]
+        let remote = fields[5]
+        let remoteRef = fields[6]
+        guard !fullName.isEmpty,
+              !shortName.isEmpty,
+              !remote.isEmpty,
+              !remoteRef.isEmpty else {
+            return nil
+        }
+        return GitUpstream(
+            fullName: fullName,
+            shortName: shortName,
+            remote: remote,
+            remoteRef: remoteRef
+        )
     }
 
     static func parseStashes(_ text: String) -> [GitStash] {

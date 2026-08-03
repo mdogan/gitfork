@@ -890,19 +890,17 @@ struct SideBySideDiffWindow: View {
                 )
             } else {
                 GeometryReader { viewport in
-                    ScrollView([.horizontal, .vertical]) {
-                        SideBySideDiffView(
-                            diff: document,
-                            availableWidth: viewport.size.width,
-                            staged: model.state.staged
-                        )
-                        .padding(.vertical, 8)
-                        .frame(
-                            minWidth: viewport.size.width,
-                            minHeight: viewport.size.height,
-                            alignment: .topLeading
-                        )
-                    }
+                    SideBySideDiffView(
+                        diff: document,
+                        availableWidth: viewport.size.width,
+                        availableHeight: viewport.size.height,
+                        staged: model.state.staged
+                    )
+                    .frame(
+                        width: viewport.size.width,
+                        height: viewport.size.height,
+                        alignment: .topLeading
+                    )
                     .background(Color(nsColor: .textBackgroundColor))
                 }
             }
@@ -1019,6 +1017,8 @@ private enum DiffLayout {
     static let accentBarWidth: CGFloat = 2.5
     static let textPadding: CGFloat = 9
     static let dividerWidth: CGFloat = 1
+    static let minimumSideBySideColumnWidth: CGFloat = 180
+    static let sideBySideHeaderHeight: CGFloat = 24
 
     /// Everything a side-by-side cell draws around its text.
     static let cellChrome = accentBarWidth + lineNumberWidth + dividerWidth + textPadding * 2
@@ -1263,50 +1263,8 @@ private struct DiffHunkView: View {
 private struct SideBySideDiffView: View {
     let diff: SideBySideDiff
     let availableWidth: CGFloat
+    let availableHeight: CGFloat
     let staged: Bool
-
-    private var oldColumnWidth: CGFloat {
-        columnWidth(for: diff.oldColumnCharacters)
-    }
-
-    private var newColumnWidth: CGFloat {
-        columnWidth(for: diff.newColumnCharacters)
-    }
-
-    /// Columns split the viewport evenly, and grow past it only when a line is
-    /// too long to fit, so short diffs fill the pane instead of hugging content.
-    private func columnWidth(for characters: Int) -> CGFloat {
-        let half = max((availableWidth - DiffLayout.dividerWidth) / 2, 0)
-        let content = DiffLayout.cellChrome
-            + CGFloat(characters) * DiffLayout.characterWidth
-        return max(half, content).rounded(.up)
-    }
-
-    var body: some View {
-        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-            Section {
-                ForEach(diff.hunks) { hunk in
-                    SideBySideHunkView(
-                        hunk: hunk,
-                        oldColumnWidth: oldColumnWidth,
-                        newColumnWidth: newColumnWidth
-                    )
-                }
-            } header: {
-                SideBySideColumnHeader(
-                    staged: staged,
-                    oldColumnWidth: oldColumnWidth,
-                    newColumnWidth: newColumnWidth
-                )
-            }
-        }
-    }
-}
-
-private struct SideBySideColumnHeader: View {
-    let staged: Bool
-    let oldColumnWidth: CGFloat
-    let newColumnWidth: CGFloat
 
     private var oldTitle: String {
         staged ? "Last Commit" : "Staged"
@@ -1316,40 +1274,139 @@ private struct SideBySideColumnHeader: View {
         staged ? "Staged" : "Working Tree"
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                caption(oldTitle, width: oldColumnWidth)
-                Divider()
-                caption(newTitle, width: newColumnWidth)
-            }
-            Divider()
-        }
-        .background(.bar)
+    private var oldContentWidth: CGFloat {
+        contentWidth(for: diff.oldColumnCharacters)
     }
 
-    private func caption(_ title: String, width: CGFloat) -> some View {
-        Text(title)
-            .font(.caption2.weight(.semibold))
-            .textCase(.uppercase)
-            .foregroundStyle(.secondary)
-            .padding(
-                .leading,
-                DiffLayout.accentBarWidth + DiffLayout.lineNumberWidth
-                    + DiffLayout.dividerWidth + DiffLayout.textPadding
+    private var newContentWidth: CGFloat {
+        contentWidth(for: diff.newColumnCharacters)
+    }
+
+    private func contentWidth(for characters: Int) -> CGFloat {
+        DiffLayout.cellChrome
+            + CGFloat(characters) * DiffLayout.characterWidth
+    }
+
+    private var contentHeight: CGFloat {
+        DiffLayout.sideBySideHeaderHeight
+            + DiffLayout.dividerWidth
+            + 16
+            + diff.hunks.reduce(0) { height, hunk in
+                height
+                    + DiffLayout.rowHeight
+                    + CGFloat(hunk.rows.count) * DiffLayout.rowHeight
+                    + 10
+            }
+    }
+
+    var body: some View {
+        ScrollView(.vertical) {
+            HSplitView {
+                SideBySideDiffPane(
+                    title: oldTitle,
+                    diff: diff,
+                    side: .old,
+                    contentWidth: oldContentWidth
+                )
+                .frame(
+                    minWidth: DiffLayout.minimumSideBySideColumnWidth,
+                    idealWidth: availableWidth / 2,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
+
+                SideBySideDiffPane(
+                    title: newTitle,
+                    diff: diff,
+                    side: .new,
+                    contentWidth: newContentWidth
+                )
+                .frame(
+                    minWidth: DiffLayout.minimumSideBySideColumnWidth,
+                    idealWidth: availableWidth / 2,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
+            }
+            .frame(
+                width: availableWidth,
+                height: max(availableHeight, contentHeight),
+                alignment: .topLeading
             )
-            .frame(width: width, height: 24, alignment: .leading)
+        }
     }
 }
 
-private struct SideBySideHunkView: View {
-    let hunk: SideBySideDiffHunk
-    let oldColumnWidth: CGFloat
-    let newColumnWidth: CGFloat
+private struct SideBySideDiffPane: View {
+    let title: String
+    let diff: SideBySideDiff
+    let side: SideBySideDiffSide
+    let contentWidth: CGFloat
 
-    private var totalWidth: CGFloat {
-        oldColumnWidth + DiffLayout.dividerWidth + newColumnWidth
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+                .padding(
+                    .leading,
+                    DiffLayout.accentBarWidth + DiffLayout.lineNumberWidth
+                        + DiffLayout.dividerWidth + DiffLayout.textPadding
+                )
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: DiffLayout.sideBySideHeaderHeight,
+                    maxHeight: DiffLayout.sideBySideHeaderHeight,
+                    alignment: .leading
+                )
+                .background(.bar)
+
+            Divider()
+
+            GeometryReader { viewport in
+                ScrollView(.horizontal) {
+                    SideBySideDiffColumn(
+                        diff: diff,
+                        side: side,
+                        contentWidth: max(contentWidth, viewport.size.width)
+                    )
+                    .padding(.vertical, 8)
+                    .frame(
+                        minHeight: viewport.size.height,
+                        alignment: .topLeading
+                    )
+                }
+            }
+        }
     }
+}
+
+private struct SideBySideDiffColumn: View {
+    let diff: SideBySideDiff
+    let side: SideBySideDiffSide
+    let contentWidth: CGFloat
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(diff.hunks) { hunk in
+                SideBySideHunkColumnView(
+                    hunk: hunk,
+                    side: side,
+                    contentWidth: contentWidth
+                )
+            }
+        }
+        .frame(width: contentWidth, alignment: .leading)
+    }
+}
+
+private struct SideBySideHunkColumnView: View {
+    let hunk: SideBySideDiffHunk
+    let side: SideBySideDiffSide
+    let contentWidth: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1364,36 +1421,21 @@ private struct SideBySideHunkView: View {
                     .frame(height: DiffLayout.rowHeight, alignment: .leading)
                 Spacer(minLength: 0)
             }
-            .frame(width: totalWidth, alignment: .leading)
+            .frame(width: contentWidth, alignment: .leading)
             .background(Color.primary.opacity(0.035))
 
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(hunk.rows) { row in
-                    SideBySideRowView(
-                        row: row,
-                        oldColumnWidth: oldColumnWidth,
-                        newColumnWidth: newColumnWidth
+                    SideBySideCell(
+                        line: row.line(side),
+                        side: side,
+                        width: contentWidth
                     )
                 }
             }
         }
-        .frame(width: totalWidth, alignment: .leading)
+        .frame(width: contentWidth, alignment: .leading)
         .padding(.bottom, 10)
-    }
-}
-
-private struct SideBySideRowView: View {
-    let row: SideBySideDiffRow
-    let oldColumnWidth: CGFloat
-    let newColumnWidth: CGFloat
-
-    var body: some View {
-        HStack(spacing: 0) {
-            SideBySideCell(line: row.old, side: .old, width: oldColumnWidth)
-            Divider()
-            SideBySideCell(line: row.new, side: .new, width: newColumnWidth)
-        }
-        .frame(height: DiffLayout.rowHeight)
     }
 }
 

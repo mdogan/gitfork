@@ -680,7 +680,7 @@ private struct DiffTextView: View {
     @ViewBuilder
     private var diffContent: some View {
         if change != nil, !document.displayHunks.isEmpty {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(document.displayHunks) { hunk in
                     DiffHunkView(
                         hunk: hunk,
@@ -698,6 +698,9 @@ private struct DiffTextView: View {
                     )
                 }
             }
+            // The enclosing viewport supplies a minimum height so short diffs
+            // fill the pane. Keep that spare height out of the hunk rows.
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 8)
         } else if !document.files.isEmpty {
             LazyVStack(alignment: .leading, spacing: 16) {

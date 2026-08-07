@@ -1517,6 +1517,122 @@ struct GitParserTests {
     }
 
     @Test
+    func buildsBranchRenameArguments() throws {
+        let branch = GitReference(
+            name: "feature/sidebar-rename",
+            fullName: "refs/heads/feature/sidebar-rename",
+            kind: .localBranch,
+            target: "abcdef",
+            isCurrent: false
+        )
+        let currentBranch = GitReference(
+            name: "main",
+            fullName: "refs/heads/main",
+            kind: .localBranch,
+            target: "abcdef",
+            isCurrent: true
+        )
+        let remoteBranch = GitReference(
+            name: "origin/main",
+            fullName: "refs/remotes/origin/main",
+            kind: .remoteBranch,
+            target: "abcdef",
+            isCurrent: false
+        )
+        let tag = GitReference(
+            name: "v1.0",
+            fullName: "refs/tags/v1.0",
+            kind: .tag,
+            target: "abcdef",
+            isCurrent: false
+        )
+
+        #expect(
+            try GitClient.renameArguments(for: branch, to: "feature/renamed")
+                == [
+                    "branch",
+                    "--move",
+                    "--",
+                    "feature/sidebar-rename",
+                    "feature/renamed"
+                ]
+        )
+        #expect(
+            try GitClient.renameArguments(for: currentBranch, to: "  trunk  ")
+                == ["branch", "--move", "--", "main", "trunk"]
+        )
+        #expect(throws: GitOperationError.self) {
+            try GitClient.renameArguments(for: branch, to: "   ")
+        }
+        #expect(throws: GitOperationError.self) {
+            try GitClient.renameArguments(for: branch, to: "feature/sidebar-rename")
+        }
+        #expect(throws: GitOperationError.self) {
+            try GitClient.renameArguments(for: remoteBranch, to: "main")
+        }
+        #expect(throws: GitOperationError.self) {
+            try GitClient.renameArguments(for: tag, to: "v1.1")
+        }
+    }
+
+    @Test
+    func renamesBranchKeepingUpstreamAndRefusingCollisions() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkBranchRenameTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("work")
+        let origin = container.appendingPathComponent("origin.git")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "--bare", origin.path], at: container)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(["remote", "add", "origin", origin.path], at: root)
+        try runGit(["push", "--set-upstream", "origin", "main"], at: root)
+        try runGit(["switch", "-c", "feature/old-name"], at: root)
+        try runGit(["push", "--set-upstream", "origin", "feature/old-name"], at: root)
+        try runGit(["switch", "main"], at: root)
+
+        let client = GitClient()
+        let snapshot = try await client.snapshot(at: root)
+        let branch = try #require(
+            snapshot.references.first { $0.name == "feature/old-name" }
+        )
+        #expect(branch.upstream?.shortName == "origin/feature/old-name")
+
+        try await client.rename(at: root, reference: branch, to: "feature/new-name")
+
+        let renamedSnapshot = try await client.snapshot(at: root)
+        #expect(renamedSnapshot.references.allSatisfy { $0.name != "feature/old-name" })
+        let renamed = try #require(
+            renamedSnapshot.references.first { $0.name == "feature/new-name" }
+        )
+        #expect(renamed.kind == .localBranch)
+        #expect(renamed.target == branch.target)
+        #expect(renamed.upstream?.shortName == "origin/feature/old-name")
+        #expect(
+            renamedSnapshot.references.contains {
+                $0.kind == .remoteBranch && $0.name == "origin/feature/old-name"
+            }
+        )
+
+        var refusedCollision = false
+        do {
+            try await client.rename(at: root, reference: renamed, to: "main")
+        } catch is GitOperationError {
+            refusedCollision = true
+        }
+        #expect(refusedCollision)
+        #expect(
+            try runGitOutput(["rev-parse", "--verify", "refs/heads/feature/new-name"], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines) == branch.target
+        )
+    }
+
+    @Test
     func buildsApplyAndDropStashArguments() {
         #expect(
             GitClient.stashArguments(message: "staged", scope: .staged)

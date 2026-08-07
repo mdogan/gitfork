@@ -239,6 +239,74 @@ struct BranchSheet: View {
     }
 }
 
+struct RenameBranchSheet: View {
+    @EnvironmentObject private var store: RepositoryStore
+    let reference: GitReference
+    @Binding var isPresented: Bool
+    @State private var name: String
+
+    init(reference: GitReference, isPresented: Binding<Bool>) {
+        self.reference = reference
+        _isPresented = isPresented
+        _name = State(initialValue: reference.name)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Image(systemName: "pencil")
+                    .font(.title)
+                    .foregroundStyle(GitForkTheme.accent)
+                VStack(alignment: .leading) {
+                    Text("Rename Branch")
+                        .font(.title2.weight(.semibold))
+                    Text(renameDescription)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            TextField("Branch name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { rename() }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    isPresented = false
+                }
+                Button {
+                    rename()
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Rename the branch and keep its commits and upstream")
+                .disabled(!canRename)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
+    }
+
+    private var renameDescription: String {
+        if reference.upstream == nil {
+            return "“\(reference.name)” keeps its commits."
+        }
+        return "“\(reference.name)” keeps its commits and its upstream."
+    }
+
+    private var canRename: Bool {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !cleanName.isEmpty && cleanName != reference.name && !store.isLoading
+    }
+
+    private func rename() {
+        guard canRename else { return }
+        store.rename(reference, to: name)
+        isPresented = false
+    }
+}
+
 struct StashSheet: View {
     @EnvironmentObject private var store: RepositoryStore
     @Binding var isPresented: Bool

@@ -886,6 +886,13 @@ struct GitClient: Sendable {
         _ = try await run(["switch", "-c", name], in: root)
     }
 
+    func rename(at root: URL, reference: GitReference, to name: String) async throws {
+        _ = try await run(
+            Self.renameArguments(for: reference, to: name),
+            in: root
+        )
+    }
+
     func delete(at root: URL, reference: GitReference) async throws {
         do {
             _ = try await run(
@@ -961,6 +968,35 @@ struct GitClient: Sendable {
                 """
             )
         }
+    }
+
+    /// Renames a local branch. The plain `--move` form is deliberate: Git
+    /// refuses to overwrite an existing branch, so a rename can never discard
+    /// another branch's commits.
+    static func renameArguments(for reference: GitReference, to name: String) throws -> [String] {
+        let newName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard reference.kind == .localBranch else {
+            throw GitOperationError(
+                command: "git branch --move",
+                message: """
+                \(reference.name) is not a local branch. Only local branches can \
+                be renamed.
+                """
+            )
+        }
+        guard !newName.isEmpty else {
+            throw GitOperationError(
+                command: "git branch --move",
+                message: "Enter a name for \(reference.name)."
+            )
+        }
+        guard newName != reference.name else {
+            throw GitOperationError(
+                command: "git branch --move",
+                message: "\(reference.name) already has that name."
+            )
+        }
+        return ["branch", "--move", "--", reference.name, newName]
     }
 
     static func forceDeleteArguments(for reference: GitReference) throws -> [String] {

@@ -482,6 +482,7 @@ private struct ReferenceFolderRow: View {
 private struct ReferenceSidebarRow: View {
     @EnvironmentObject private var store: RepositoryStore
     @State private var isConfirmingDelete = false
+    @State private var isRenaming = false
 
     let reference: GitReference
     let title: String
@@ -521,6 +522,15 @@ private struct ReferenceSidebarRow: View {
                 store.checkout(reference)
             }
             .disabled(store.isLoading)
+
+            if reference.kind == .localBranch {
+                Button {
+                    isRenaming = true
+                } label: {
+                    Label("Rename Branch…", systemImage: "pencil")
+                }
+                .disabled(store.isLoading)
+            }
 
             if reference.kind != .remoteBranch || remoteBranchTarget != nil {
                 Divider()
@@ -572,6 +582,9 @@ private struct ReferenceSidebarRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(deleteConfirmationMessage)
+        }
+        .sheet(isPresented: $isRenaming) {
+            RenameBranchSheet(reference: reference, isPresented: $isRenaming)
         }
     }
 

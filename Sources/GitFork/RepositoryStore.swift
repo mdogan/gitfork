@@ -668,6 +668,31 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func rename(_ reference: GitReference, to name: String) {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty, cleanName != reference.name else { return }
+        mutate("Renaming \(reference.name) to \(cleanName)") { root in
+            try await self.client.rename(at: root, reference: reference, to: cleanName)
+            self.followRename(of: reference, to: cleanName)
+        }
+    }
+
+    /// Keeps a renamed branch selected under its new name. Git moves the ref
+    /// itself, so the history scope has to follow it or the reload that comes
+    /// next asks for a ref that no longer exists.
+    private func followRename(of reference: GitReference, to name: String) {
+        guard selectedReference == reference else { return }
+        selectedReference = GitReference(
+            name: name,
+            fullName: "refs/heads/\(name)",
+            kind: reference.kind,
+            target: reference.target,
+            isCurrent: reference.isCurrent,
+            upstream: reference.upstream
+        )
+        historyScope = CommitHistoryScope(revision: selectedReference?.fullName)
+    }
+
     /// The remote-tracking branch that can be deleted along with `reference`.
     /// Returns `nil` when the branch has no upstream, or when its remote-tracking
     /// ref is already gone locally, in which case the remote branch is either
@@ -946,6 +971,14 @@ final class RepositoryStore: ObservableObject {
         stashes = snapshot.stashes
         worktrees = snapshot.worktrees
         replaceHistory(snapshot.commits)
+
+        // The selected reference is a value, so it goes stale whenever its
+        // target, upstream, or name changes. Re-bind it to the reloaded ref of
+        // the same name so the sidebar keeps showing the selection.
+        if let selectedReference,
+           let replacement = references.first(where: { $0.fullName == selectedReference.fullName }) {
+            self.selectedReference = replacement
+        }
 
         if let selectedStash,
            let replacement = stashes.first(where: { $0.id == selectedStash.id }) {

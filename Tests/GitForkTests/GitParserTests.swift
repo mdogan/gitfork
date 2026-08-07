@@ -814,14 +814,97 @@ struct GitParserTests {
             }
         )
 
-        await #expect(throws: GitOperationError.self) {
+        do {
             try await client.removeWorktree(at: root, worktree: worktree)
+            Issue.record("Plain removal unexpectedly deleted a dirty worktree")
+        } catch let error as DirtyWorktreeRemovalError {
+            #expect(error.path == worktree.path)
         }
         #expect(FileManager.default.fileExists(atPath: linked.path))
         #expect(
             FileManager.default.fileExists(
                 atPath: linked.appendingPathComponent("untracked.txt").path
             )
+        )
+
+        #expect(
+            try GitClient.removeWorktreeArguments(for: worktree, force: true)
+                == ["worktree", "remove", "--force", "--", worktree.path]
+        )
+
+        try await client.removeWorktree(at: root, worktree: worktree, force: true)
+
+        #expect(!FileManager.default.fileExists(atPath: linked.path))
+        #expect(try await client.snapshot(at: root).worktrees.count == 1)
+    }
+
+    /// A worktree holding a branch is exactly the case that blocks branch
+    /// deletion, so removing it must be possible and must keep the branch.
+    @Test
+    func removesWorktreeWithCheckedOutBranchAndKeepsBranch() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkBranchWorktreeTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("repository")
+        let linked = container.appendingPathComponent("linked worktree")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(["worktree", "add", "-b", "feature/linked", linked.path], at: root)
+
+        let client = GitClient()
+        let worktree = try #require(
+            try await client.snapshot(at: root).worktrees.first {
+                URL(fileURLWithPath: $0.path).standardizedFileURL
+                    == linked.standardizedFileURL
+            }
+        )
+        #expect(!worktree.isDetached)
+        #expect(worktree.branchName == "feature/linked")
+
+        let reference = GitReference(
+            name: "feature/linked",
+            fullName: "refs/heads/feature/linked",
+            kind: .localBranch,
+            target: "abcdef",
+            isCurrent: false
+        )
+
+        // Git blocks the branch while the worktree holds it, and the failure
+        // must point at the worktree as the way forward.
+        do {
+            try await client.delete(at: root, reference: reference)
+            Issue.record("Deleting a branch held by a worktree unexpectedly succeeded")
+        } catch let error as GitOperationError {
+            #expect(error.message.contains(linked.lastPathComponent))
+            #expect(error.message.contains("Delete that worktree"))
+        }
+
+        #expect(
+            try GitClient.removeWorktreeArguments(for: worktree)
+                == ["worktree", "remove", "--", worktree.path]
+        )
+
+        try await client.removeWorktree(at: root, worktree: worktree)
+
+        #expect(!FileManager.default.fileExists(atPath: linked.path))
+        #expect(try await client.snapshot(at: root).worktrees.count == 1)
+        #expect(
+            !(try runGitOutput(["branch", "--list", "feature/linked"], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty)
+        )
+
+        // Freeing the worktree is what makes the branch deletable again.
+        try await client.delete(at: root, reference: reference)
+
+        #expect(
+            try runGitOutput(["branch", "--list", "feature/linked"], at: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
         )
     }
 

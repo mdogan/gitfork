@@ -431,6 +431,18 @@ struct UnmergedBranchDeletionError: LocalizedError, Sendable {
     }
 }
 
+/// Raised when `git worktree remove` refuses because the worktree holds
+/// modified or untracked files. Removing it anyway requires `--force`, so the
+/// UI turns this into a second, explicit confirmation.
+struct DirtyWorktreeRemovalError: LocalizedError, Sendable {
+    let path: String
+    let message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
 enum GitParser {
     static func parseStatus(_ data: Data) -> [WorkingChange] {
         let fields = data.split(separator: 0, omittingEmptySubsequences: true)

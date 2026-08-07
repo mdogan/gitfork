@@ -194,7 +194,7 @@ private struct WorktreeSidebarRow: View {
                     Label("Prune Stale Worktrees", systemImage: "trash")
                 }
                 .disabled(store.isLoading)
-            } else if worktree.isDetached && !worktree.isCurrent {
+            } else if !worktree.isCurrent {
                 Divider()
                 Button(role: .destructive) {
                     confirm(.delete)
@@ -210,10 +210,15 @@ private struct WorktreeSidebarRow: View {
         }
         .confirmationDialog(
             confirmationTitle,
-            isPresented: $isConfirmingAction,
+            isPresented: confirmationBinding,
             titleVisibility: .visible
         ) {
-            if pendingAction == .delete {
+            if isConfirmingForceDelete {
+                Button("Force Delete Worktree", role: .destructive) {
+                    store.forceDelete(worktree)
+                }
+                .disabled(store.isLoading)
+            } else if pendingAction == .delete {
                 Button("Delete Worktree", role: .destructive) {
                     store.delete(worktree)
                 }
@@ -230,33 +235,70 @@ private struct WorktreeSidebarRow: View {
         }
     }
 
+    private var isConfirmingForceDelete: Bool {
+        store.worktreePendingForceDelete == worktree
+    }
+
+    /// Keeps the manual confirmation and the follow-up force confirmation on a
+    /// single dialog, so a refused removal reopens in place instead of asking
+    /// the user to find the row again.
+    private var confirmationBinding: Binding<Bool> {
+        Binding(
+            get: { isConfirmingAction || isConfirmingForceDelete },
+            set: { isPresented in
+                guard !isPresented else { return }
+                isConfirmingAction = false
+                if isConfirmingForceDelete {
+                    store.cancelWorktreeForceDelete()
+                }
+            }
+        )
+    }
+
     private var confirmationTitle: String {
+        if isConfirmingForceDelete {
+            return "Force Delete Worktree “\(worktree.displayName)”?"
+        }
         switch pendingAction {
         case .delete:
-            "Delete Worktree “\(worktree.displayName)”?"
+            return "Delete Worktree “\(worktree.displayName)”?"
         case .prune:
-            "Prune Stale Worktrees?"
+            return "Prune Stale Worktrees?"
         case nil:
-            "Confirm Worktree Action"
+            return "Confirm Worktree Action"
         }
     }
 
     private var confirmationMessage: String {
+        if isConfirmingForceDelete {
+            return """
+            This worktree contains modified or untracked files. Force deleting it runs \
+            git worktree remove --force and permanently discards that uncommitted work.
+            """
+        }
         switch pendingAction {
         case .delete:
-            """
+            return """
             This removes the worktree directory and its Git registration. Git will refuse \
-            if it contains uncommitted changes. Detached commits not referenced by a branch \
-            or tag may become unreachable.
+            if it contains uncommitted changes.\(branchRetentionMessageSuffix)
             """
         case .prune:
-            """
+            return """
             This removes the Git registration for every stale worktree in this repository. \
             It does not delete existing worktree directories, and Git preserves locked worktrees.
             """
         case nil:
-            ""
+            return ""
         }
+    }
+
+    /// Deleting a worktree never deletes the branch it holds, and freeing that
+    /// branch is the usual reason for removing the worktree in the first place.
+    private var branchRetentionMessageSuffix: String {
+        guard let branchName = worktree.branchName else {
+            return " Detached commits not referenced by a branch or tag may become unreachable."
+        }
+        return " The branch \(branchName) is kept and becomes available for checkout and deletion."
     }
 
     private func confirm(_ action: Action) {

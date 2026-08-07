@@ -38,6 +38,7 @@ final class RepositoryStore: ObservableObject {
     }
     @Published var errorMessage: String?
     @Published private(set) var branchPendingForceDelete: GitReference?
+    @Published private(set) var worktreePendingForceDelete: GitWorktree?
     @Published var isConfirmingPush = false
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
@@ -800,8 +801,31 @@ final class RepositoryStore: ObservableObject {
 
     func delete(_ worktree: GitWorktree) {
         mutate("Deleting worktree \(worktree.displayName)") { root in
-            try await self.client.removeWorktree(at: root, worktree: worktree)
+            do {
+                try await self.client.removeWorktree(at: root, worktree: worktree)
+            } catch let error as DirtyWorktreeRemovalError {
+                guard error.path == worktree.path else {
+                    throw error
+                }
+                self.worktreePendingForceDelete = worktree
+            }
         }
+    }
+
+    func forceDelete(_ worktree: GitWorktree) {
+        guard worktreePendingForceDelete == worktree, !isLoading else { return }
+        worktreePendingForceDelete = nil
+        mutate("Force deleting worktree \(worktree.displayName)") { root in
+            try await self.client.removeWorktree(
+                at: root,
+                worktree: worktree,
+                force: true
+            )
+        }
+    }
+
+    func cancelWorktreeForceDelete() {
+        worktreePendingForceDelete = nil
     }
 
     func pruneStaleWorktrees() {
@@ -1226,6 +1250,7 @@ final class RepositoryStore: ObservableObject {
         commitMessage = ""
         amend = false
         branchPendingForceDelete = nil
+        worktreePendingForceDelete = nil
         isConfirmingPush = false
         cachedCommitHash = nil
         cachedCommitDetails = nil

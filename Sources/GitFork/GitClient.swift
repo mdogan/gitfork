@@ -900,15 +900,30 @@ struct GitClient: Sendable {
                 in: root
             )
         } catch let error as GitOperationError {
-            guard reference.kind == .localBranch,
-                  error.message.contains("is not fully merged") else {
-                throw error
+            guard reference.kind == .localBranch else { throw error }
+            if error.message.contains("is not fully merged") {
+                throw UnmergedBranchDeletionError(
+                    branch: reference.name,
+                    message: error.message
+                )
             }
-            throw UnmergedBranchDeletionError(
-                branch: reference.name,
-                message: error.message
+            guard Self.describesWorktreeCheckout(error.message) else { throw error }
+            throw GitOperationError(
+                command: error.command,
+                message: """
+                \(error.message) Delete that worktree, or check out a different \
+                branch inside it, before deleting \(reference.name).
+                """
             )
         }
+    }
+
+    /// Git blocks branch deletion while a linked worktree has the branch
+    /// checked out. The wording changed across Git versions, so both forms are
+    /// recognised.
+    private static func describesWorktreeCheckout(_ message: String) -> Bool {
+        message.contains("used by worktree at")
+            || message.contains("checked out at")
     }
 
     func forceDelete(at root: URL, reference: GitReference) async throws {
@@ -1015,20 +1030,41 @@ struct GitClient: Sendable {
         return ["branch", "-D", "--", reference.name]
     }
 
-    func removeWorktree(at root: URL, worktree: GitWorktree) async throws {
-        _ = try await run(
-            Self.removeWorktreeArguments(for: worktree),
-            in: root
-        )
-    }
-
-    static func removeWorktreeArguments(for worktree: GitWorktree) throws -> [String] {
-        guard worktree.isDetached else {
-            throw GitOperationError(
-                command: "git worktree remove",
-                message: "Only detached worktrees can be deleted from GitFork."
+    /// Removes a linked worktree. A worktree with a branch checked out can be
+    /// removed like any other; Git keeps the branch itself, and freeing it this
+    /// way is what makes that branch deletable again.
+    func removeWorktree(
+        at root: URL,
+        worktree: GitWorktree,
+        force: Bool = false
+    ) async throws {
+        do {
+            _ = try await run(
+                Self.removeWorktreeArguments(for: worktree, force: force),
+                in: root
+            )
+        } catch let error as GitOperationError {
+            guard !force, Self.describesDirtyWorktree(error.message) else {
+                throw error
+            }
+            throw DirtyWorktreeRemovalError(
+                path: worktree.path,
+                message: error.message
             )
         }
+    }
+
+    /// Git refuses a plain removal when the worktree still holds modified or
+    /// untracked files and says so by pointing at `--force`.
+    private static func describesDirtyWorktree(_ message: String) -> Bool {
+        message.contains("contains modified or untracked files")
+            || message.contains("use --force")
+    }
+
+    static func removeWorktreeArguments(
+        for worktree: GitWorktree,
+        force: Bool = false
+    ) throws -> [String] {
         guard !worktree.isCurrent else {
             throw GitOperationError(
                 command: "git worktree remove",
@@ -1053,7 +1089,9 @@ struct GitClient: Sendable {
                 message: "Prune this missing worktree instead of deleting it."
             )
         }
-        return ["worktree", "remove", "--", worktree.path]
+        return force
+            ? ["worktree", "remove", "--force", "--", worktree.path]
+            : ["worktree", "remove", "--", worktree.path]
     }
 
     func pruneStaleWorktrees(at root: URL) async throws {

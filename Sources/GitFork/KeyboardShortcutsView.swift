@@ -23,6 +23,7 @@ struct KeyboardShortcutSection: Identifiable, Hashable {
                 KeyboardShortcutReference(action: "Open Commit", keys: "⌘G"),
                 KeyboardShortcutReference(action: "Show Changes", keys: "⌘P"),
                 KeyboardShortcutReference(action: "Refresh", keys: "⌘R"),
+                KeyboardShortcutReference(action: "Keyboard Shortcuts", keys: "?"),
             ]
         ),
         KeyboardShortcutSection(

@@ -70,6 +70,7 @@ struct GitForkApp: App {
                 Button("Keyboard Shortcuts…") {
                     store.isShowingKeyboardShortcuts = true
                 }
+                .keyboardShortcut("?", modifiers: [])
             }
         }
 

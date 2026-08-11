@@ -17,6 +17,7 @@ struct KeyboardShortcutSection: Identifiable, Hashable {
         KeyboardShortcutSection(
             title: "Application",
             shortcuts: [
+                KeyboardShortcutReference(action: "New Window", keys: "⌘N"),
                 KeyboardShortcutReference(action: "Open Repository", keys: "⌘O"),
                 KeyboardShortcutReference(action: "Switch Repository", keys: "⌘K"),
                 KeyboardShortcutReference(action: "File or Directory History", keys: "⌘F"),

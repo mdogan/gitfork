@@ -41,7 +41,7 @@ struct WelcomeView: View {
 
                     ForEach(store.recentRepositories.prefix(5), id: \.path) { url in
                         Button {
-                            store.openRepository(url)
+                            store.requestOpenRepository(url)
                         } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "shippingbox")

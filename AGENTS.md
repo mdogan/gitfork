@@ -18,8 +18,10 @@ Swift cannot reasonably satisfy.
 ## Repository Layout
 
 - `Sources/GitFork/GitForkApp.swift`: app entry point, scenes, menus, and settings
-- `Sources/GitFork/RepositoryStore.swift`: `@MainActor` application state and UI
+- `Sources/GitFork/RepositoryStore.swift`: `@MainActor` per-window state and UI
   actions
+- `Sources/GitFork/RepositoryWindows.swift`: repository window value, routing,
+  and the registry that keeps one window per repository
 - `Sources/GitFork/GitClient.swift`: asynchronous `/usr/bin/git` process wrapper
 - `Sources/GitFork/CLIInstaller.swift`: in-app `fork` helper installation UI and
   service
@@ -107,6 +109,11 @@ swift test --disable-sandbox
   `.topLeading`; do not allow bidirectional scrolling to center it vertically.
 - Repository switching uses the persisted `recentRepositories` list. Clearly
   mark the active repository and retain an “Open Other Repository…” action.
+- Each window owns a `RepositoryStore` and shows one repository, and one
+  repository is never open in two windows. Switching repositories opens or
+  focuses another window; only a window with no repository adopts one in place.
+  Route every user-initiated open through `requestOpenRepository(_:)`;
+  `openRepository(_:)` loads into the window that already owns the request.
 - The `fork` helper is bundled under `Contents/Helpers` and installed from the
   application menu. Keep its `gitfork://open?path=...` contract synchronized
   with `GitForkExternalURL`.

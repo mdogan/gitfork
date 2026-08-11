@@ -51,6 +51,9 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var repositoryPathItems: [RepositoryPathItem] = []
     @Published private(set) var isLoadingRepositoryPaths = false
     @Published private(set) var recentRepositories: [URL] = []
+    /// A repository whose root has been resolved and that is waiting for the
+    /// window layer to decide which window shows it.
+    @Published private(set) var pendingOpenRequest: RepositoryOpenRequest?
 
     private let client = GitClient()
     private var loadGeneration = 0
@@ -67,10 +70,15 @@ final class RepositoryStore: ObservableObject {
     private var cachedCommitHash: String?
     private var cachedCommitDetails: String?
     private var cachedVerifiedCommit: GitCommit?
-    private let recentKey = "recentRepositories"
+    private var recentsObserver: NSObjectProtocol?
     private let monitorInterval: Duration
     private let historyPageSize: Int
+    private static let recentKey = "recentRepositories"
     private static let signCommitKey = "signCommitsWithGPG"
+    /// Posted so every open window shows the same recent repositories.
+    private static let recentsDidChange = Notification.Name(
+        "GitForkRecentRepositoriesDidChange"
+    )
 
     init(
         monitorInterval: Duration = .seconds(2),
@@ -80,9 +88,23 @@ final class RepositoryStore: ObservableObject {
         self.monitorInterval = monitorInterval
         self.historyPageSize = historyPageSize
         signCommit = UserDefaults.standard.bool(forKey: Self.signCommitKey)
-        recentRepositories = (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
-            .map { URL(fileURLWithPath: $0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        recentRepositories = Self.loadRecentRepositories()
+        recentsObserver = NotificationCenter.default.addObserver(
+            forName: Self.recentsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, notification.object as AnyObject !== self else { return }
+                self.recentRepositories = Self.loadRecentRepositories()
+            }
+        }
+    }
+
+    deinit {
+        if let recentsObserver {
+            NotificationCenter.default.removeObserver(recentsObserver)
+        }
     }
 
     var repositoryName: String {
@@ -128,17 +150,8 @@ final class RepositoryStore: ObservableObject {
     }
 
     func chooseRepository() {
-        let panel = NSOpenPanel()
-        panel.title = "Open Git Repository"
-        panel.message = "Choose a folder containing a Git repository."
-        panel.prompt = "Open Repository"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.resolvesAliases = true
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        openRepository(url)
+        guard let url = RepositoryOpenPanel.run() else { return }
+        requestOpenRepository(url)
     }
 
     func showPathHistoryPicker() {
@@ -233,6 +246,24 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    /// Resolves the repository root, then hands it to the window layer. One
+    /// repository stays in one window: an already-open repository is brought
+    /// forward, an empty window adopts the repository, and a window that
+    /// already shows another repository opens a new one.
+    func requestOpenRepository(_ url: URL) {
+        _ = startOperation("Opening repository") {
+            let root = try await self.client.repositoryRoot(from: url)
+            try Task.checkCancellation()
+            self.pendingOpenRequest = RepositoryOpenRequest(root: root)
+        }
+    }
+
+    func clearPendingOpenRequest() {
+        pendingOpenRequest = nil
+    }
+
+    /// Loads a repository into this window. Call `requestOpenRepository(_:)`
+    /// instead when the user asks to open a repository.
     func openRepository(_ url: URL) {
         _ = startOperation("Opening repository") {
             let root = try await self.client.repositoryRoot(from: url)
@@ -256,7 +287,7 @@ final class RepositoryStore: ObservableObject {
             errorMessage = "GitFork received an invalid repository URL."
             return
         }
-        openRepository(URL(fileURLWithPath: path, isDirectory: true))
+        requestOpenRepository(URL(fileURLWithPath: path, isDirectory: true))
     }
 
     func refresh() {
@@ -1417,6 +1448,21 @@ final class RepositoryStore: ObservableObject {
         recentRepositories.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
         recentRepositories.insert(url, at: 0)
         recentRepositories = Array(recentRepositories.prefix(8))
-        UserDefaults.standard.set(recentRepositories.map(\.path), forKey: recentKey)
+        UserDefaults.standard.set(recentRepositories.map(\.path), forKey: Self.recentKey)
+        NotificationCenter.default.post(name: Self.recentsDidChange, object: self)
     }
+
+    private static func loadRecentRepositories() -> [URL] {
+        (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
+            .map { URL(fileURLWithPath: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+}
+
+/// A resolved repository root waiting to be routed to a window. The identifier
+/// keeps two requests for the same repository distinct so the window layer sees
+/// every one of them.
+struct RepositoryOpenRequest: Equatable {
+    let id = UUID()
+    let root: URL
 }

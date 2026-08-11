@@ -62,7 +62,7 @@ struct RepositorySwitcherMenu: View {
                 ForEach(store.recentRepositories, id: \.path) { repository in
                     Button {
                         guard !isCurrent(repository) else { return }
-                        store.openRepository(repository)
+                        store.requestOpenRepository(repository)
                     } label: {
                         Label {
                             Text(repositoryLabel(repository))
@@ -269,7 +269,7 @@ struct RepositorySwitcherSheet: View {
     private func open(_ repository: URL) {
         dismiss()
         guard !isCurrent(repository) else { return }
-        store.openRepository(repository)
+        store.requestOpenRepository(repository)
     }
 
     private func openOtherRepository() {

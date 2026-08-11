@@ -10,6 +10,7 @@ struct KeyboardShortcutReferenceTests {
 
         #expect(
             application.shortcuts == [
+                KeyboardShortcutReference(action: "New Window", keys: "⌘N"),
                 KeyboardShortcutReference(action: "Open Repository", keys: "⌘O"),
                 KeyboardShortcutReference(action: "Switch Repository", keys: "⌘K"),
                 KeyboardShortcutReference(action: "File or Directory History", keys: "⌘F"),

@@ -355,15 +355,58 @@ struct WorkingChange: Identifiable, Hashable, Sendable {
     }
 
     var isStaged: Bool {
-        indexStatus != " " && indexStatus != "?"
+        !isConflicted && indexStatus != " " && indexStatus != "?"
     }
 
     var isUnstaged: Bool {
-        workTreeStatus != " " || (indexStatus == "?" && workTreeStatus == "?")
+        !isConflicted
+            && (workTreeStatus != " " || (indexStatus == "?" && workTreeStatus == "?"))
     }
 
     var isUntracked: Bool {
         indexStatus == "?" && workTreeStatus == "?"
+    }
+
+    /// Porcelain v1 uses these seven two-character states for paths whose
+    /// index still contains unmerged stages. They are neither staged changes
+    /// nor ordinary working-tree changes until the user resolves them.
+    var isConflicted: Bool {
+        switch (indexStatus, workTreeStatus) {
+        case ("D", "D"), ("A", "U"), ("U", "D"), ("U", "A"),
+             ("D", "U"), ("A", "A"), ("U", "U"):
+            true
+        default:
+            false
+        }
+    }
+
+    var conflictDescription: String? {
+        switch (indexStatus, workTreeStatus) {
+        case ("D", "D"): "Both deleted"
+        case ("A", "U"): "Added by us"
+        case ("U", "D"): "Deleted by them"
+        case ("U", "A"): "Added by them"
+        case ("D", "U"): "Deleted by us"
+        case ("A", "A"): "Both added"
+        case ("U", "U"): "Both modified"
+        default: nil
+        }
+    }
+
+    func hasConflictVersion(_ side: ConflictResolutionSide) -> Bool {
+        guard isConflicted else { return false }
+        return switch side {
+        case .ours:
+            switch (indexStatus, workTreeStatus) {
+            case ("A", "U"), ("U", "D"), ("A", "A"), ("U", "U"): true
+            default: false
+            }
+        case .theirs:
+            switch (indexStatus, workTreeStatus) {
+            case ("U", "A"), ("D", "U"), ("A", "A"), ("U", "U"): true
+            default: false
+            }
+        }
     }
 
     var displayStatus: String {
@@ -371,6 +414,9 @@ struct WorkingChange: Identifiable, Hashable, Sendable {
     }
 
     func displayStatus(staged: Bool) -> String {
+        if isConflicted {
+            return "Conflict"
+        }
         let status = staged ? indexStatus : workTreeStatus
         return switch status {
         case "A", "?": "Added"
@@ -388,8 +434,23 @@ struct WorkingChange: Identifiable, Hashable, Sendable {
     }
 
     func statusSymbol(staged: Bool) -> String {
+        if isConflicted {
+            return "U"
+        }
         let status = staged ? indexStatus : workTreeStatus
         return status == "?" ? "A" : String(status)
+    }
+}
+
+enum ConflictResolutionSide: String, Sendable {
+    case ours
+    case theirs
+
+    var title: String {
+        switch self {
+        case .ours: "Ours"
+        case .theirs: "Theirs"
+        }
     }
 }
 

@@ -50,8 +50,16 @@ struct ChangesView: View {
                 }
                 .menuStyle(.borderedButton)
                 .controlSize(.regular)
-                .help("Choose which changes to save to a stash")
-                .disabled(store.changes.isEmpty || store.isLoading)
+                .help(
+                    store.conflictedChanges.isEmpty
+                        ? "Choose which changes to save to a stash"
+                        : "Resolve all conflicts before stashing changes"
+                )
+                .disabled(
+                    store.changes.isEmpty
+                        || store.isLoading
+                        || !store.conflictedChanges.isEmpty
+                )
 
                 Button {
                     showingCommitSheet = true
@@ -64,8 +72,12 @@ struct ChangesView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .keyboardShortcut(.return, modifiers: .command)
-                .help("Write a commit message for the staged changes")
-                .disabled(store.isLoading)
+                .help(
+                    store.conflictedChanges.isEmpty
+                        ? "Write a commit message for the staged changes"
+                        : "Resolve all conflicts before committing"
+                )
+                .disabled(store.isLoading || !store.conflictedChanges.isEmpty)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -99,17 +111,20 @@ private struct ChangeList: View {
     @EnvironmentObject private var store: RepositoryStore
     @Environment(\.openWindow) private var openWindow
     @State private var pendingDiscard: [ChangeEntry] = []
+    @State private var pendingConflictResolution: ConflictResolutionRequest?
     @FocusState private var isListFocused: Bool
 
     var body: some View {
         let entries = store.changeEntries
         let stagedEntries = entries.stagedSide
+        let conflictEntries = entries.conflicted
         let unstagedEntries = entries.unstagedSide
         VStack(spacing: 0) {
             if store.changeSelection.count > 1 {
                 SelectionActionBar(
                     entries: store.selectedChangeEntries,
-                    requestDiscard: requestDiscard
+                    requestDiscard: requestDiscard,
+                    requestConflictResolution: requestConflictResolution
                 )
                 Divider()
             }
@@ -124,6 +139,7 @@ private struct ChangeList: View {
                                 ChangeRow(
                                     entry: entry,
                                     requestDiscard: requestDiscard,
+                                    requestConflictResolution: requestConflictResolution,
                                     focusList: focusList
                                 )
                                 .tag(entry.id)
@@ -140,6 +156,29 @@ private struct ChangeList: View {
                         )
                     }
 
+                    if !conflictEntries.isEmpty {
+                        Section {
+                            ForEach(conflictEntries) { entry in
+                                ChangeRow(
+                                    entry: entry,
+                                    requestDiscard: requestDiscard,
+                                    requestConflictResolution: requestConflictResolution,
+                                    focusList: focusList
+                                )
+                                .tag(entry.id)
+                            }
+                        } header: {
+                            ChangeSectionHeader(
+                                title: "Conflicts",
+                                count: conflictEntries.count,
+                                systemImage: "exclamationmark.triangle.fill",
+                                tint: .orange,
+                                actionTitle: nil,
+                                action: nil
+                            )
+                        }
+                    }
+
                     Section {
                         if unstagedEntries.isEmpty {
                             EmptyChangeRow(title: "No unstaged changes")
@@ -148,6 +187,7 @@ private struct ChangeList: View {
                                 ChangeRow(
                                     entry: entry,
                                     requestDiscard: requestDiscard,
+                                    requestConflictResolution: requestConflictResolution,
                                     focusList: focusList
                                 )
                                 .tag(entry.id)
@@ -204,6 +244,28 @@ private struct ChangeList: View {
         } message: {
             Text(DiscardPrompt.message(for: pendingDiscard))
         }
+        .alert(
+            ConflictResolutionPrompt.title(for: pendingConflictResolution),
+            isPresented: Binding(
+                get: { pendingConflictResolution != nil },
+                set: { if !$0 { pendingConflictResolution = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                pendingConflictResolution = nil
+            }
+            Button(
+                ConflictResolutionPrompt.actionTitle(for: pendingConflictResolution),
+                role: .destructive
+            ) {
+                if let request = pendingConflictResolution {
+                    store.resolveConflicts(request.entries, using: request.side)
+                }
+                pendingConflictResolution = nil
+            }
+        } message: {
+            Text(ConflictResolutionPrompt.message(for: pendingConflictResolution))
+        }
     }
 
     private var primarySelection: Binding<ChangeEntryID?> {
@@ -219,6 +281,18 @@ private struct ChangeList: View {
         pendingDiscard = targets
     }
 
+    private func requestConflictResolution(
+        _ entries: [ChangeEntry],
+        using side: ConflictResolutionSide
+    ) {
+        let conflicts = entries.conflicted
+        guard !conflicts.isEmpty else { return }
+        pendingConflictResolution = ConflictResolutionRequest(
+            entries: conflicts,
+            side: side
+        )
+    }
+
     private func focusList() {
         isListFocused = true
     }
@@ -226,6 +300,7 @@ private struct ChangeList: View {
     private func openSideBySideDiff() -> KeyPress.Result {
         guard let repositoryURL = store.repositoryURL,
               let change = store.selectedChange,
+              !change.isConflicted,
               !store.diff.isEmpty else {
             return .ignored
         }
@@ -251,7 +326,11 @@ private struct ChangeList: View {
 
         switch action {
         case .stage:
-            store.stage(store.selectedChangeEntries)
+            if store.selectedChange?.isConflicted == true {
+                store.markConflictsResolved(store.selectedChangeEntries)
+            } else {
+                store.stage(store.selectedChangeEntries)
+            }
         case .unstage:
             store.unstage(store.selectedChangeEntries)
         }
@@ -265,6 +344,7 @@ private struct SelectionActionBar: View {
     @EnvironmentObject private var store: RepositoryStore
     let entries: [ChangeEntry]
     let requestDiscard: ([ChangeEntry]) -> Void
+    let requestConflictResolution: ([ChangeEntry], ConflictResolutionSide) -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -275,6 +355,36 @@ private struct SelectionActionBar: View {
                 .font(.caption.weight(.medium))
 
             Spacer()
+
+            if !entries.conflicted.isEmpty {
+                Menu {
+                    Button(role: .destructive) {
+                        requestConflictResolution(entries, .ours)
+                    } label: {
+                        Label("Use Ours…", systemImage: "arrow.left")
+                    }
+
+                    Button(role: .destructive) {
+                        requestConflictResolution(entries, .theirs)
+                    } label: {
+                        Label("Use Theirs…", systemImage: "arrow.right")
+                    }
+
+                    Divider()
+
+                    Button {
+                        store.markConflictsResolved(entries)
+                    } label: {
+                        Label("Mark Resolved", systemImage: "checkmark.circle")
+                    }
+                } label: {
+                    Label("Resolve", systemImage: "checkmark.shield")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Resolve the selected conflicts")
+                .disabled(store.isLoading)
+            }
 
             if !entries.unstagedSide.isEmpty {
                 Button {
@@ -337,8 +447,8 @@ private struct ChangeSectionHeader: View {
     let count: Int
     let systemImage: String
     let tint: Color
-    let actionTitle: String
-    let action: () -> Void
+    let actionTitle: String?
+    let action: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 7) {
@@ -354,13 +464,15 @@ private struct ChangeSectionHeader: View {
                 .padding(.vertical, 2)
                 .background(tint.opacity(0.13), in: Capsule())
             Spacer()
-            Button(actionTitle, action: action)
-                .font(.callout.weight(.semibold))
-                .textCase(nil)
-                .buttonStyle(GitForkHoverButtonStyle(.text))
-                .foregroundStyle(tint)
-                .help(actionTitle)
-                .disabled(count == 0)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .font(.callout.weight(.semibold))
+                    .textCase(nil)
+                    .buttonStyle(GitForkHoverButtonStyle(.text))
+                    .foregroundStyle(tint)
+                    .help(actionTitle)
+                    .disabled(count == 0)
+            }
         }
         .textCase(nil)
         .padding(.horizontal, 10)
@@ -390,6 +502,7 @@ private struct ChangeRow: View {
     @EnvironmentObject private var store: RepositoryStore
     let entry: ChangeEntry
     let requestDiscard: ([ChangeEntry]) -> Void
+    let requestConflictResolution: ([ChangeEntry], ConflictResolutionSide) -> Void
     let focusList: () -> Void
 
     private var change: WorkingChange { entry.change }
@@ -420,28 +533,66 @@ private struct ChangeRow: View {
 
                 Spacer()
 
-                Button {
-                    staged ? store.unstage(change) : store.stage(change)
-                } label: {
-                    Image(systemName: staged ? "minus" : "plus")
-                        .font(.body.weight(.medium))
-                        .frame(width: 20, height: 20)
-                        .contentShape(Rectangle())
+                if change.isConflicted {
+                    Menu {
+                        Button(role: .destructive) {
+                            requestConflictResolution(actionTargets, .ours)
+                        } label: {
+                            Label("Use Ours…", systemImage: "arrow.left")
+                        }
+
+                        Button(role: .destructive) {
+                            requestConflictResolution(actionTargets, .theirs)
+                        } label: {
+                            Label("Use Theirs…", systemImage: "arrow.right")
+                        }
+
+                        Divider()
+
+                        Button {
+                            store.markConflictsResolved(actionTargets)
+                        } label: {
+                            Label("Mark Resolved", systemImage: "checkmark.circle")
+                        }
+                    } label: {
+                        Image(systemName: "checkmark.shield")
+                            .font(.body.weight(.medium))
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Resolve this conflict")
+                    .disabled(store.isLoading)
+                } else {
+                    Button {
+                        staged ? store.unstage(change) : store.stage(change)
+                    } label: {
+                        Image(systemName: staged ? "minus" : "plus")
+                            .font(.body.weight(.medium))
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(GitForkHoverButtonStyle(.icon))
+                    .help(staged ? "Unstage" : "Stage")
+                    .disabled(store.isLoading)
                 }
-                .buttonStyle(GitForkHoverButtonStyle(.icon))
-                .help(staged ? "Unstage" : "Stage")
-                .disabled(store.isLoading)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(GitForkHoverButtonStyle(.compactRow(isSelected: isSelected)))
         .help(
-            "View \(staged ? "staged" : "working tree") diff for \(change.path)"
-                + " · Space for side by side"
+            "View \(change.isConflicted ? "conflict" : staged ? "staged" : "working tree") diff for \(change.path)"
+                + (change.isConflicted ? "" : " · Space for side by side")
+                + (change.isConflicted ? " · Return to mark resolved" : "")
                 + " · Shift-click for a range, Command-click to add or remove"
         )
         .contextMenu {
-            ChangeActionsMenu(entries: actionTargets, requestDiscard: requestDiscard)
+            ChangeActionsMenu(
+                entries: actionTargets,
+                requestDiscard: requestDiscard,
+                requestConflictResolution: requestConflictResolution
+            )
         }
         .listRowInsets(EdgeInsets(top: 1, leading: 7, bottom: 1, trailing: 7))
         .listRowBackground(Color.clear)
@@ -468,10 +619,37 @@ private struct ChangeActionsMenu: View {
     @EnvironmentObject private var store: RepositoryStore
     let entries: [ChangeEntry]
     let requestDiscard: ([ChangeEntry]) -> Void
+    let requestConflictResolution: ([ChangeEntry], ConflictResolutionSide) -> Void
 
     var body: some View {
         let stageable = entries.unstagedSide
         let unstageable = entries.stagedSide
+        let conflicts = entries.conflicted
+
+        if !conflicts.isEmpty {
+            Button(role: .destructive) {
+                requestConflictResolution(conflicts, .ours)
+            } label: {
+                Label("Use Ours…", systemImage: "arrow.left")
+            }
+
+            Button(role: .destructive) {
+                requestConflictResolution(conflicts, .theirs)
+            } label: {
+                Label("Use Theirs…", systemImage: "arrow.right")
+            }
+
+            Button {
+                store.markConflictsResolved(conflicts)
+            } label: {
+                Label("Mark Resolved", systemImage: "checkmark.circle")
+            }
+            .disabled(store.isLoading)
+
+            if !stageable.isEmpty || !unstageable.isEmpty {
+                Divider()
+            }
+        }
 
         if !stageable.isEmpty {
             Button {
@@ -519,6 +697,34 @@ private enum ChangeActionTitle {
 
     static func discard(_ count: Int) -> String {
         count == 1 ? "Discard Changes…" : "Discard Changes in \(count) Files…"
+    }
+}
+
+private struct ConflictResolutionRequest {
+    let entries: [ChangeEntry]
+    let side: ConflictResolutionSide
+}
+
+private enum ConflictResolutionPrompt {
+    static func title(for request: ConflictResolutionRequest?) -> String {
+        guard let request else { return "Resolve Conflicts?" }
+        return request.entries.count == 1
+            ? "Use \(request.side.title) for This File?"
+            : "Use \(request.side.title) for \(request.entries.count) Files?"
+    }
+
+    static func actionTitle(for request: ConflictResolutionRequest?) -> String {
+        request.map { "Use \($0.side.title)" } ?? "Resolve"
+    }
+
+    static func message(for request: ConflictResolutionRequest?) -> String {
+        guard let request else { return "" }
+        let subject = request.entries.count == 1
+            ? request.entries[0].change.path
+            : "the selected \(request.entries.count) conflicted files"
+        return "This replaces the current working-tree contents of \(subject) "
+            + "with Git’s \(request.side.title.lowercased()) version and marks "
+            + "the conflict resolved. Any manual edits in those files will be lost."
     }
 }
 

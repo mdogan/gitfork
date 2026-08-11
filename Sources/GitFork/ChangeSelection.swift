@@ -40,13 +40,19 @@ extension Array where Element == ChangeEntry {
     /// Rows listed under "Unstaged Changes": the ones `git add` and a discard
     /// apply to.
     var unstagedSide: [ChangeEntry] {
-        filter { !$0.staged }
+        filter { !$0.staged && !$0.change.isConflicted }
     }
 
     /// Rows listed under "Staged Changes": the ones `git restore --staged`
     /// applies to.
     var stagedSide: [ChangeEntry] {
         filter(\.staged)
+    }
+
+    /// Conflict rows occupy their own Changes section. They intentionally do
+    /// not participate in generic stage, unstage, or discard actions.
+    var conflicted: [ChangeEntry] {
+        filter { $0.change.isConflicted }
     }
 
     var paths: [String] {

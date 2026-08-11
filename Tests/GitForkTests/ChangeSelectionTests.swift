@@ -203,11 +203,13 @@ struct ChangeSelectionTests {
             ChangeEntry(change("a.swift", index: "M", workTree: " "), staged: true),
             ChangeEntry(change("b.swift", index: "M", workTree: "M"), staged: true),
             ChangeEntry(change("b.swift", index: "M", workTree: "M"), staged: false),
+            ChangeEntry(change("conflict.swift", index: "U", workTree: "U"), staged: false),
             ChangeEntry(change("c.swift", index: "?", workTree: "?"), staged: false)
         ]
 
         #expect(entries.stagedSide.paths == ["a.swift", "b.swift"])
         #expect(entries.unstagedSide.paths == ["b.swift", "c.swift"])
+        #expect(entries.conflicted.paths == ["conflict.swift"])
         #expect(entries[0].id == ChangeEntryID(path: "a.swift", staged: true))
     }
 

@@ -18,6 +18,7 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var canLoadMoreHistory = false
     @Published private(set) var isLoadingMoreHistory = false
     @Published private(set) var diff = ""
+    @Published private(set) var conflictDocument: ConflictDocument?
     @Published private(set) var isLoading = false
     @Published private(set) var operationLabel: String?
     @Published var selectedSection: WorkspaceSection = .history
@@ -91,14 +92,19 @@ final class RepositoryStore: ObservableObject {
         changes.filter(\.isStaged)
     }
 
+    var conflictedChanges: [WorkingChange] {
+        changes.filter(\.isConflicted)
+    }
+
     var unstagedChanges: [WorkingChange] {
         changes.filter(\.isUnstaged)
     }
 
     /// Every change-list row in the order the list draws them: staged first,
-    /// then working tree. Shift-click ranges follow this order.
+    /// then conflicts, then working tree. Shift-click ranges follow this order.
     var changeEntries: [ChangeEntry] {
         stagedChanges.map { ChangeEntry($0, staged: true) }
+            + conflictedChanges.map { ChangeEntry($0, staged: false) }
             + unstagedChanges.map { ChangeEntry($0, staged: false) }
     }
 
@@ -407,6 +413,7 @@ final class RepositoryStore: ObservableObject {
         selectedStash = nil
         selectedChange = change
         selectedChangeIsStaged = staged
+        conflictDocument = nil
         selectedCommit = nil
         guard let root = repositoryURL, let change else {
             diff = ""
@@ -419,10 +426,23 @@ final class RepositoryStore: ObservableObject {
         let generation = loadGeneration
         detailTask = Task {
             do {
-                let patch = try await client.diff(at: root, change: change, staged: staged)
+                async let patchTask = client.diff(
+                    at: root,
+                    change: change,
+                    staged: staged
+                )
+                async let conflictTask = client.conflictDocument(
+                    at: root,
+                    change: change
+                )
+                let (patch, loadedConflictDocument) = try await (
+                    patchTask,
+                    conflictTask
+                )
                 try Task.checkCancellation()
                 if generation == loadGeneration {
                     diff = patch
+                    conflictDocument = loadedConflictDocument
                 }
             } catch is CancellationError {
                 // A newer selection superseded this diff load.
@@ -520,6 +540,59 @@ final class RepositoryStore: ObservableObject {
             reloadScope: .workingTree
         ) { root in
             try await self.client.unstage(at: root, paths: paths)
+        }
+    }
+
+    func markConflictsResolved(_ entries: [ChangeEntry]) {
+        let conflicts = entries.conflicted.map(\.change)
+        guard !conflicts.isEmpty else { return }
+        mutate(
+            Self.operationLabel("Marking resolved", paths: conflicts.map(\.path)),
+            reloadScope: .workingTree
+        ) { root in
+            try await self.client.markConflictsResolved(at: root, conflicts: conflicts)
+        }
+    }
+
+    func resolveConflicts(
+        _ entries: [ChangeEntry],
+        using side: ConflictResolutionSide
+    ) {
+        let conflicts = entries.conflicted.map(\.change)
+        guard !conflicts.isEmpty else { return }
+        mutate(
+            Self.operationLabel("Resolving with \(side.title)", paths: conflicts.map(\.path)),
+            reloadScope: .workingTree
+        ) { root in
+            try await self.client.resolveConflicts(
+                at: root,
+                conflicts: conflicts,
+                using: side
+            )
+        }
+    }
+
+    func resolveConflictBlock(
+        _ block: ConflictBlock,
+        using side: ConflictResolutionSide
+    ) {
+        guard let change = selectedChange,
+              change.isConflicted,
+              let document = conflictDocument,
+              document.conflicts.contains(where: { $0.id == block.id }) else {
+            return
+        }
+        mutate(
+            "Using \(side.title) for one conflict in \(change.path)",
+            reloadScope: .workingTree
+        ) { root in
+            try await self.client.resolveConflictBlock(
+                at: root,
+                change: change,
+                document: document,
+                blockID: block.id,
+                using: side
+            )
         }
     }
 
@@ -1157,6 +1230,9 @@ final class RepositoryStore: ObservableObject {
             guard let change = self.changes.first(where: { $0.path == id.path }) else {
                 return nil
             }
+            if !id.staged && change.isConflicted {
+                return id
+            }
             if id.staged ? change.isStaged : change.isUnstaged {
                 return id
             }
@@ -1240,6 +1316,7 @@ final class RepositoryStore: ObservableObject {
         worktrees = []
         commits = []
         diff = ""
+        conflictDocument = nil
         selectedReference = nil
         selectedStash = nil
         historyScope = .all

@@ -27,6 +27,29 @@ struct GitParserTests {
     }
 
     @Test
+    func classifiesEveryPorcelainConflictStateAndAvailableVersions() {
+        let input = "DD both-deleted\u{0}AU added-by-us\u{0}UD deleted-by-them\u{0}"
+            + "UA added-by-them\u{0}DU deleted-by-us\u{0}AA both-added\u{0}"
+            + "UU both-modified\u{0}"
+        let changes = GitParser.parseStatus(Data(input.utf8))
+
+        #expect(changes.count == 7)
+        #expect(changes.allSatisfy { $0.isConflicted })
+        #expect(changes.allSatisfy { !$0.isStaged && !$0.isUnstaged })
+        #expect(changes.allSatisfy { $0.statusSymbol(staged: false) == "U" })
+
+        let byPath = Dictionary(uniqueKeysWithValues: changes.map { ($0.path, $0) })
+        #expect(byPath["both-deleted"]?.conflictDescription == "Both deleted")
+        #expect(byPath["both-modified"]?.conflictDescription == "Both modified")
+        #expect(byPath["added-by-us"]?.hasConflictVersion(.ours) == true)
+        #expect(byPath["added-by-us"]?.hasConflictVersion(.theirs) == false)
+        #expect(byPath["deleted-by-us"]?.hasConflictVersion(.ours) == false)
+        #expect(byPath["deleted-by-us"]?.hasConflictVersion(.theirs) == true)
+        #expect(byPath["both-added"]?.hasConflictVersion(.ours) == true)
+        #expect(byPath["both-added"]?.hasConflictVersion(.theirs) == true)
+    }
+
+    @Test
     func presentsDualStateChangeAccordingToItsSection() {
         let change = WorkingChange(
             path: "dual-state.swift",
@@ -1100,6 +1123,193 @@ struct GitParserTests {
         let restored = try String(contentsOf: file, encoding: .utf8)
         #expect(!restored.contains("unstaged tail"))
         #expect(restored.contains("LINE 15\n"))
+    }
+
+    @Test
+    func resolvesBothModifiedConflictsWithEitherSideOrCurrentContents() async throws {
+        let client = GitClient()
+
+        let oursRoot = try prepareBothModifiedConflict(named: "ours")
+        defer { try? FileManager.default.removeItem(at: oursRoot) }
+        var snapshot = try await client.snapshot(at: oursRoot)
+        var conflict = try #require(snapshot.changes.first)
+        #expect(conflict.indexStatus == "U")
+        #expect(conflict.workTreeStatus == "U")
+        #expect(conflict.isConflicted)
+
+        try await client.resolveConflicts(
+            at: oursRoot,
+            conflicts: [conflict],
+            using: .ours
+        )
+        #expect(
+            try String(
+                contentsOf: oursRoot.appendingPathComponent("conflict.txt"),
+                encoding: .utf8
+            ) == "ours\n"
+        )
+        snapshot = try await client.snapshot(at: oursRoot)
+        #expect(!snapshot.changes.contains { $0.isConflicted })
+
+        let theirsRoot = try prepareBothModifiedConflict(named: "theirs")
+        defer { try? FileManager.default.removeItem(at: theirsRoot) }
+        snapshot = try await client.snapshot(at: theirsRoot)
+        conflict = try #require(snapshot.changes.first)
+        try await client.resolveConflicts(
+            at: theirsRoot,
+            conflicts: [conflict],
+            using: .theirs
+        )
+        #expect(
+            try String(
+                contentsOf: theirsRoot.appendingPathComponent("conflict.txt"),
+                encoding: .utf8
+            ) == "theirs\n"
+        )
+        snapshot = try await client.snapshot(at: theirsRoot)
+        #expect(!snapshot.changes.contains { $0.isConflicted })
+        #expect(snapshot.changes.first?.isStaged == true)
+
+        let manualRoot = try prepareBothModifiedConflict(named: "manual")
+        defer { try? FileManager.default.removeItem(at: manualRoot) }
+        let manualFile = manualRoot.appendingPathComponent("conflict.txt")
+        try "combined resolution\n".write(to: manualFile, atomically: true, encoding: .utf8)
+        snapshot = try await client.snapshot(at: manualRoot)
+        conflict = try #require(snapshot.changes.first)
+        try await client.markConflictsResolved(at: manualRoot, conflicts: [conflict])
+
+        snapshot = try await client.snapshot(at: manualRoot)
+        #expect(!snapshot.changes.contains { $0.isConflicted })
+        #expect(snapshot.changes.first?.isStaged == true)
+        #expect(try runGitOutput(["show", ":conflict.txt"], at: manualRoot) == "combined resolution\n")
+    }
+
+    @Test
+    func resolvesConflictBlocksOneAtATimeAndStagesOnlyTheFinalChoice() async throws {
+        let root = try prepareTwoBlockConflict()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let client = GitClient()
+        var snapshot = try await client.snapshot(at: root)
+        var change = try #require(snapshot.changes.first { $0.path == "conflict.txt" })
+        var document = try #require(
+            try await client.conflictDocument(at: root, change: change)
+        )
+        #expect(document.conflicts.count == 2)
+
+        try await client.resolveConflictBlock(
+            at: root,
+            change: change,
+            document: document,
+            blockID: document.conflicts[0].id,
+            using: .ours
+        )
+
+        snapshot = try await client.snapshot(at: root)
+        change = try #require(snapshot.changes.first { $0.path == "conflict.txt" })
+        #expect(change.isConflicted)
+        #expect(
+            !((try runGitOutput(["ls-files", "-u", "--", "conflict.txt"], at: root))
+                .isEmpty)
+        )
+        document = try #require(
+            try await client.conflictDocument(at: root, change: change)
+        )
+        #expect(document.conflicts.count == 1)
+        var contents = try String(
+            contentsOf: root.appendingPathComponent("conflict.txt"),
+            encoding: .utf8
+        )
+        #expect(contents.contains("ours line 2"))
+        #expect(contents.contains("<<<<<<<"))
+
+        try await client.resolveConflictBlock(
+            at: root,
+            change: change,
+            document: document,
+            blockID: document.conflicts[0].id,
+            using: .theirs
+        )
+
+        snapshot = try await client.snapshot(at: root)
+        let resolved = try #require(
+            snapshot.changes.first { $0.path == "conflict.txt" }
+        )
+        #expect(!resolved.isConflicted)
+        #expect(resolved.isStaged)
+        #expect(
+            (try runGitOutput(["ls-files", "-u", "--", "conflict.txt"], at: root))
+                .isEmpty
+        )
+        contents = try String(
+            contentsOf: root.appendingPathComponent("conflict.txt"),
+            encoding: .utf8
+        )
+        #expect(contents.contains("ours line 2"))
+        #expect(contents.contains("theirs line 32"))
+        #expect(!contents.contains("<<<<<<<"))
+    }
+
+    @Test
+    func refusesToResolveAConflictBlockAfterTheFileChanges() async throws {
+        let root = try prepareTwoBlockConflict()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let client = GitClient()
+        let snapshot = try await client.snapshot(at: root)
+        let change = try #require(snapshot.changes.first { $0.path == "conflict.txt" })
+        let document = try #require(
+            try await client.conflictDocument(at: root, change: change)
+        )
+        let file = root.appendingPathComponent("conflict.txt")
+        let externallyEdited = document.text.replacingOccurrences(
+            of: "line 10",
+            with: "external edit on line 10"
+        )
+        try externallyEdited.write(to: file, atomically: true, encoding: .utf8)
+
+        do {
+            try await client.resolveConflictBlock(
+                at: root,
+                change: change,
+                document: document,
+                blockID: document.conflicts[0].id,
+                using: .ours
+            )
+            Issue.record("A stale conflict document unexpectedly overwrote the file")
+        } catch let error as GitOperationError {
+            #expect(error.message.contains("changed after its conflicts were loaded"))
+        }
+
+        #expect(try String(contentsOf: file, encoding: .utf8) == externallyEdited)
+        #expect(
+            !((try runGitOutput(["ls-files", "-u", "--", "conflict.txt"], at: root))
+                .isEmpty)
+        )
+    }
+
+    @Test
+    func choosingAnAbsentConflictSideResolvesThePathAsADeletion() async throws {
+        let root = try prepareDeleteModifyConflict(named: "deleted-ours")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let client = GitClient()
+        var snapshot = try await client.snapshot(at: root)
+        let conflict = try #require(snapshot.changes.first)
+        #expect(conflict.indexStatus == "D")
+        #expect(conflict.workTreeStatus == "U")
+        #expect(!conflict.hasConflictVersion(.ours))
+        #expect(conflict.hasConflictVersion(.theirs))
+
+        try await client.resolveConflicts(
+            at: root,
+            conflicts: [conflict],
+            using: .ours
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("conflict.txt").path))
+        snapshot = try await client.snapshot(at: root)
+        #expect(!snapshot.changes.contains { $0.isConflicted })
     }
 
     @Test
@@ -2500,6 +2710,114 @@ struct GitParserTests {
 
     private func runGit(_ arguments: [String], at root: URL) throws {
         _ = try runGitCommand(arguments, at: root)
+    }
+
+    private func prepareBothModifiedConflict(named name: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkConflictTests-\(name)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        do {
+            try configureConflictRepository(at: root)
+            let file = root.appendingPathComponent("conflict.txt")
+            try "base\n".write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["add", "conflict.txt"], at: root)
+            try runGit(["commit", "-m", "Base"], at: root)
+
+            try runGit(["switch", "-c", "incoming"], at: root)
+            try "theirs\n".write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["commit", "-am", "Incoming change"], at: root)
+
+            try runGit(["switch", "main"], at: root)
+            try "ours\n".write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["commit", "-am", "Our change"], at: root)
+            try expectMergeConflict(at: root)
+            return root
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+    }
+
+    private func prepareDeleteModifyConflict(named name: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkConflictTests-\(name)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        do {
+            try configureConflictRepository(at: root)
+            let file = root.appendingPathComponent("conflict.txt")
+            try "base\n".write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["add", "conflict.txt"], at: root)
+            try runGit(["commit", "-m", "Base"], at: root)
+
+            try runGit(["switch", "-c", "incoming"], at: root)
+            try "theirs\n".write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["commit", "-am", "Incoming change"], at: root)
+
+            try runGit(["switch", "main"], at: root)
+            try runGit(["rm", "conflict.txt"], at: root)
+            try runGit(["commit", "-m", "Delete on ours"], at: root)
+            try expectMergeConflict(at: root)
+            return root
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+    }
+
+    private func prepareTwoBlockConflict() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkConflictBlockTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        do {
+            try configureConflictRepository(at: root)
+            let file = root.appendingPathComponent("conflict.txt")
+            let baseLines = (1...40).map { "line \($0)" }
+            try (baseLines.joined(separator: "\n") + "\n")
+                .write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["add", "conflict.txt"], at: root)
+            try runGit(["commit", "-m", "Base"], at: root)
+
+            try runGit(["switch", "-c", "incoming"], at: root)
+            var theirs = baseLines
+            theirs[1] = "theirs line 2"
+            theirs[31] = "theirs line 32"
+            try (theirs.joined(separator: "\n") + "\n")
+                .write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["commit", "-am", "Incoming changes"], at: root)
+
+            try runGit(["switch", "main"], at: root)
+            var ours = baseLines
+            ours[1] = "ours line 2"
+            ours[31] = "ours line 32"
+            try (ours.joined(separator: "\n") + "\n")
+                .write(to: file, atomically: true, encoding: .utf8)
+            try runGit(["commit", "-am", "Our changes"], at: root)
+            try expectMergeConflict(at: root)
+            return root
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+    }
+
+    private func configureConflictRepository(at root: URL) throws {
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+    }
+
+    private func expectMergeConflict(at root: URL) throws {
+        do {
+            try runGit(["merge", "incoming"], at: root)
+            throw GitOperationError(
+                command: "git merge incoming",
+                message: "Expected the fixture merge to conflict."
+            )
+        } catch let error as GitOperationError {
+            guard !error.message.contains("Expected the fixture merge") else {
+                throw error
+            }
+        }
     }
 
     private func runGitOutput(_ arguments: [String], at root: URL) throws -> String {

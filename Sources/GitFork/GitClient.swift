@@ -632,6 +632,112 @@ struct GitClient: Sendable {
         }
     }
 
+    func markConflictsResolved(
+        at root: URL,
+        conflicts: [WorkingChange]
+    ) async throws {
+        let paths = conflicts.filter(\.isConflicted).map(\.path)
+        guard !paths.isEmpty else { return }
+        // -A records a selected deletion as well as edited file contents.
+        _ = try await run(["add", "-A", "--"] + paths, in: root)
+    }
+
+    func conflictDocument(
+        at root: URL,
+        change: WorkingChange
+    ) async throws -> ConflictDocument? {
+        guard change.isConflicted else { return nil }
+        let fileURL = root.appendingPathComponent(change.path)
+        return await Task.detached(priority: .userInitiated) {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]) else {
+                return nil
+            }
+            guard values.isRegularFile == true else { return nil }
+            guard let data = try? Data(contentsOf: fileURL) else { return nil }
+            guard let text = String(data: data, encoding: .utf8) else { return nil }
+            let document = ConflictDocument(text)
+            return document.conflicts.isEmpty ? nil : document
+        }.value
+    }
+
+    /// Resolves only one textual marker block. The unmerged index stages stay
+    /// intact while other well-formed blocks remain; the path is added only
+    /// after the final block is gone.
+    func resolveConflictBlock(
+        at root: URL,
+        change: WorkingChange,
+        document: ConflictDocument,
+        blockID: ConflictBlock.ID,
+        using side: ConflictResolutionSide
+    ) async throws {
+        guard change.isConflicted else { return }
+        let fileURL = root.appendingPathComponent(change.path)
+        let shouldMarkResolved = try await Task.detached(priority: .userInitiated) {
+            let data = try Data(contentsOf: fileURL)
+            guard let currentText = String(data: data, encoding: .utf8),
+                  currentText == document.text else {
+                throw GitOperationError(
+                    command: "resolve conflict block in \(change.path)",
+                    message: "The file changed after its conflicts were loaded. Review the updated file and try again."
+                )
+            }
+            guard let resolvedText = document.resolving(
+                blockID: blockID,
+                using: side
+            ) else {
+                throw GitOperationError(
+                    command: "resolve conflict block in \(change.path)",
+                    message: "That conflict block is no longer present. Review the updated file and try again."
+                )
+            }
+
+            let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            try Data(resolvedText.utf8).write(to: fileURL, options: .atomic)
+            if let permissions = attributes[.posixPermissions] {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: permissions],
+                    ofItemAtPath: fileURL.path
+                )
+            }
+
+            let resolvedDocument = ConflictDocument(resolvedText)
+            return resolvedDocument.conflicts.isEmpty
+                && !resolvedDocument.hasUnparsedMarkers
+        }.value
+
+        if shouldMarkResolved {
+            _ = try await run(["add", "-A", "--", change.path], in: root)
+        }
+    }
+
+    /// Replaces each conflicted working-tree path with the selected unmerged
+    /// stage and records the result in the index. A side can legitimately be
+    /// absent for modify/delete conflicts; choosing that side resolves the
+    /// path as a deletion.
+    func resolveConflicts(
+        at root: URL,
+        conflicts: [WorkingChange],
+        using side: ConflictResolutionSide
+    ) async throws {
+        let conflicts = conflicts.filter(\.isConflicted)
+        guard !conflicts.isEmpty else { return }
+
+        let presentPaths = conflicts
+            .filter { $0.hasConflictVersion(side) }
+            .map(\.path)
+        let deletedPaths = conflicts
+            .filter { !$0.hasConflictVersion(side) }
+            .map(\.path)
+
+        if !presentPaths.isEmpty {
+            _ = try await run(["checkout", "--\(side.rawValue)", "--"] + presentPaths, in: root)
+            _ = try await run(["add", "-A", "--"] + presentPaths, in: root)
+        }
+        if !deletedPaths.isEmpty {
+            _ = try await run(["rm", "-f", "--"] + deletedPaths, in: root)
+        }
+    }
+
     func stage(at root: URL, patch: String) async throws {
         try await apply(patch, at: root, cached: true, reverse: false)
     }

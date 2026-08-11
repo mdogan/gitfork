@@ -147,12 +147,17 @@ struct DetailView: View {
                     staged: store.selectedChangeIsStaged
                 )
                 Divider()
-                DiffTextView(
-                    text: store.diff,
-                    parsedDiff: parsedDiff,
-                    change: change,
-                    staged: store.selectedChangeIsStaged
-                )
+                if change.isConflicted,
+                   let conflictDocument = store.conflictDocument {
+                    ConflictDocumentView(document: conflictDocument)
+                } else {
+                    DiffTextView(
+                        text: store.diff,
+                        parsedDiff: parsedDiff,
+                        change: change,
+                        staged: store.selectedChangeIsStaged
+                    )
+                }
             } else {
                 ContentUnavailableView(
                     "No Selection",
@@ -400,6 +405,7 @@ private struct ChangeHeader: View {
     let change: WorkingChange
     let staged: Bool
     @State private var isConfirmingFileDiscard = false
+    @State private var pendingConflictSide: ConflictResolutionSide?
 
     var body: some View {
         let statusSymbol = change.statusSymbol(staged: staged)
@@ -414,7 +420,7 @@ private struct ChangeHeader: View {
                 Text(change.path)
                     .font(.headline)
                     .textSelection(.enabled)
-                Text("\(change.displayStatus(staged: staged)) · \(staged ? "Staged" : "Working tree")")
+                Text(changeDetailStatus)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -438,18 +444,52 @@ private struct ChangeHeader: View {
             }
             .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
             .help("Open a side-by-side comparison in a new window")
-            .disabled(store.repositoryURL == nil || store.diff.isEmpty)
+            .disabled(
+                store.repositoryURL == nil
+                    || store.diff.isEmpty
+                    || change.isConflicted
+            )
 
-            Button {
-                staged ? store.unstage(change) : store.stage(change)
-            } label: {
-                Label(staged ? "Unstage" : "Stage", systemImage: staged ? "minus" : "plus")
+            if change.isConflicted {
+                Menu {
+                    Button(role: .destructive) {
+                        pendingConflictSide = .ours
+                    } label: {
+                        Label("Use Ours…", systemImage: "arrow.left")
+                    }
+
+                    Button(role: .destructive) {
+                        pendingConflictSide = .theirs
+                    } label: {
+                        Label("Use Theirs…", systemImage: "arrow.right")
+                    }
+                } label: {
+                    Label("Choose Version", systemImage: "arrow.triangle.branch")
+                }
+                .menuStyle(.borderedButton)
+                .help("Choose one side and replace the current file after confirmation")
+                .disabled(store.isLoading)
+
+                Button {
+                    store.markConflictsResolved([conflictEntry])
+                } label: {
+                    Label("Mark Resolved", systemImage: "checkmark.circle")
+                }
+                .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+                .help("Stage the file’s current contents as the resolved version")
+                .disabled(store.isLoading)
+            } else {
+                Button {
+                    staged ? store.unstage(change) : store.stage(change)
+                } label: {
+                    Label(staged ? "Unstage" : "Stage", systemImage: staged ? "minus" : "plus")
+                }
+                .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+                .help(staged ? "Move this file back to working changes" : "Stage this file for commit")
+                .disabled(store.isLoading)
             }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help(staged ? "Move this file back to working changes" : "Stage this file for commit")
-            .disabled(store.isLoading)
 
-            if !staged {
+            if !staged && !change.isConflicted {
                 Button(role: .destructive) {
                     isConfirmingFileDiscard = true
                 } label: {
@@ -473,6 +513,266 @@ private struct ChangeHeader: View {
             } else {
                 Text("All unstaged changes in \(change.path) will be permanently discarded. This cannot be undone.")
             }
+        }
+        .alert(
+            pendingConflictSide.map { "Use \($0.title) for This File?" }
+                ?? "Resolve Conflict?",
+            isPresented: Binding(
+                get: { pendingConflictSide != nil },
+                set: { if !$0 { pendingConflictSide = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                pendingConflictSide = nil
+            }
+            Button(
+                pendingConflictSide.map { "Use \($0.title)" } ?? "Resolve",
+                role: .destructive
+            ) {
+                if let side = pendingConflictSide {
+                    store.resolveConflicts([conflictEntry], using: side)
+                }
+                pendingConflictSide = nil
+            }
+        } message: {
+            if let side = pendingConflictSide {
+                Text(
+                    "This replaces the current contents of \(change.path) with "
+                        + "Git’s \(side.title.lowercased()) version and marks the conflict "
+                        + "resolved. Any manual edits in this file will be lost."
+                )
+            }
+        }
+    }
+
+    private var conflictEntry: ChangeEntry {
+        ChangeEntry(change, staged: false)
+    }
+
+    private var changeDetailStatus: String {
+        if change.isConflicted {
+            return "\(change.conflictDescription ?? "Unmerged") · Conflict"
+        }
+        return "\(change.displayStatus(staged: staged)) · \(staged ? "Staged" : "Working tree")"
+    }
+}
+
+/// A hunk-like conflict resolver for textual working-tree markers. Each choice
+/// edits only its block; `GitClient` leaves the path unmerged until the last
+/// well-formed block has been chosen.
+private struct ConflictDocumentView: View {
+    @EnvironmentObject private var store: RepositoryStore
+    let document: ConflictDocument
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .foregroundStyle(.orange)
+                        Text(
+                            "\(document.conflicts.count) unresolved conflict"
+                                + (document.conflicts.count == 1 ? "" : "s")
+                        )
+                        .font(.callout.weight(.semibold))
+                        Spacer()
+                        Text("Choose a version for each block")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+
+                    if document.hasUnparsedMarkers {
+                        Label(
+                            "Some marker-like lines could not be paired. Resolve them manually; "
+                                + "GitFork will not mark the file resolved automatically.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    ForEach(document.conflicts) { block in
+                        ConflictBlockView(
+                            block: block,
+                            number: (document.conflicts.firstIndex(of: block) ?? 0) + 1,
+                            total: document.conflicts.count,
+                            isLoading: store.isLoading,
+                            resolve: { side in
+                                store.resolveConflictBlock(block, using: side)
+                            }
+                        )
+                    }
+                }
+                .padding(14)
+                .frame(
+                    minWidth: max(viewport.size.width, 760),
+                    minHeight: viewport.size.height,
+                    alignment: .topLeading
+                )
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+        }
+    }
+}
+
+private struct ConflictBlockView: View {
+    let block: ConflictBlock
+    let number: Int
+    let total: Int
+    let isLoading: Bool
+    let resolve: (ConflictResolutionSide) -> Void
+
+    @State private var showsBase = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Conflict \(number) of \(total)")
+                    .font(.callout.weight(.semibold))
+                Text("Lines \(block.id + 1)–\(block.endLine + 1)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(Color.primary.opacity(0.045))
+
+            Divider()
+
+            HStack(alignment: .top, spacing: 0) {
+                ConflictVersionColumn(
+                    title: "Ours",
+                    label: block.oursLabel,
+                    lines: block.oursLines,
+                    tint: GitForkTheme.blue,
+                    isLoading: isLoading,
+                    action: { resolve(.ours) }
+                )
+
+                Divider()
+
+                ConflictVersionColumn(
+                    title: "Theirs",
+                    label: block.theirsLabel,
+                    lines: block.theirsLines,
+                    tint: GitForkTheme.purple,
+                    isLoading: isLoading,
+                    action: { resolve(.theirs) }
+                )
+            }
+
+            if let baseLines = block.baseLines {
+                Divider()
+                DisclosureGroup(isExpanded: $showsBase) {
+                    ConflictCodeLines(lines: baseLines, tint: .secondary)
+                        .padding(.top, 6)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Base")
+                            .font(.caption.weight(.semibold))
+                        if let baseLabel = block.baseLabel, !baseLabel.isEmpty {
+                            Text(baseLabel)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color.primary.opacity(0.025))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(.orange.opacity(0.35))
+        }
+    }
+}
+
+private struct ConflictVersionColumn: View {
+    let title: String
+    let label: String
+    let lines: [String]
+    let tint: Color
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 7, height: 7)
+                Text(title)
+                    .font(.caption.weight(.bold))
+                if !label.isEmpty {
+                    Text(label)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                Button("Use \(title)", action: action)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(tint)
+                    .help(
+                        "Replace only this conflict block with Git’s "
+                            + "\(title.lowercased()) version"
+                    )
+                    .disabled(isLoading)
+            }
+            .padding(9)
+            .background(tint.opacity(0.08))
+
+            Divider()
+
+            ConflictCodeLines(lines: lines, tint: tint)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(minWidth: 340, maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct ConflictCodeLines: View {
+    let lines: [String]
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if lines.isEmpty {
+                Text("No content — choosing this version removes the block")
+                    .font(.caption.italic())
+                    .foregroundStyle(.secondary)
+                    .padding(10)
+            } else {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(line.isEmpty ? " " : line)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 10)
+                        .frame(
+                            minHeight: DiffLayout.rowHeight,
+                            alignment: .leading
+                        )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(tint.opacity(0.8))
+                .frame(width: DiffLayout.accentBarWidth)
         }
     }
 }
@@ -679,7 +979,9 @@ private struct DiffTextView: View {
 
     @ViewBuilder
     private var diffContent: some View {
-        if change != nil, !document.displayHunks.isEmpty {
+        if change != nil,
+           change?.isConflicted != true,
+           !document.displayHunks.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(document.displayHunks) { hunk in
                     DiffHunkView(

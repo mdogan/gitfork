@@ -40,6 +40,7 @@ final class RepositoryStore: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var branchPendingForceDelete: GitReference?
     @Published private(set) var worktreePendingForceDelete: GitWorktree?
+    @Published private(set) var pendingPushPlan: GitPushPlan?
     @Published var isConfirmingPush = false
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
@@ -713,9 +714,17 @@ final class RepositoryStore: ObservableObject {
     }
 
     func push() {
-        let target = pushTarget
-        mutate("Pushing \(branch)") { root in
-            try await self.client.push(at: root, target: target)
+        guard let plan = pendingPushPlan else {
+            errorMessage = "Choose a local branch to push first."
+            return
+        }
+        pendingPushPlan = nil
+        mutate("Pushing \(plan.branchName)") { root in
+            try await self.client.push(
+                at: root,
+                target: plan.target,
+                sourceRef: plan.sourceRef
+            )
         }
     }
 
@@ -724,7 +733,7 @@ final class RepositoryStore: ObservableObject {
             showBusyError()
             return
         }
-        guard pushTarget != nil else {
+        guard let pushTarget else {
             if branch.hasPrefix("Detached at ") {
                 errorMessage = "Create or check out a branch before pushing a detached HEAD."
             } else {
@@ -735,7 +744,54 @@ final class RepositoryStore: ObservableObject {
             }
             return
         }
+        pendingPushPlan = GitPushPlan(
+            branchName: branch,
+            sourceRef: "HEAD",
+            target: pushTarget,
+            ahead: ahead
+        )
         isConfirmingPush = true
+    }
+
+    func requestPushConfirmation(for reference: GitReference) {
+        guard reference.kind == .localBranch else { return }
+        guard let root = repositoryURL else { return }
+        pendingPushPlan = nil
+
+        let preparation = startOperation("Preparing to push \(reference.name)") {
+            let target = try await self.client.pushTarget(at: root, for: reference)
+            guard let target else {
+                throw GitOperationError(
+                    command: "git push",
+                    message: """
+                    \(reference.name) has no safe push target. Add a remote or repair its \
+                    upstream configuration.
+                    """
+                )
+            }
+            try Task.checkCancellation()
+            guard self.isCurrentRepository(root) else { return }
+            self.pendingPushPlan = GitPushPlan(
+                branchName: reference.name,
+                sourceRef: reference.fullName,
+                target: target,
+                ahead: reference.isCurrent ? self.ahead : nil
+            )
+        }
+        guard let preparation else { return }
+
+        Task {
+            await preparation.value
+            guard self.isCurrentRepository(root),
+                  self.pendingPushPlan?.sourceRef == reference.fullName else {
+                return
+            }
+            self.isConfirmingPush = true
+        }
+    }
+
+    func cancelPushConfirmation() {
+        pendingPushPlan = nil
     }
 
     func checkout(_ reference: GitReference) {
@@ -1342,6 +1398,7 @@ final class RepositoryStore: ObservableObject {
         amend = false
         branchPendingForceDelete = nil
         worktreePendingForceDelete = nil
+        pendingPushPlan = nil
         isConfirmingPush = false
         cachedCommitHash = nil
         cachedCommitDetails = nil

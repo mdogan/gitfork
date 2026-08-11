@@ -924,18 +924,28 @@ struct GitClient: Sendable {
         _ = try await run(["pull", "--ff-only"], in: root)
     }
 
-    func push(at root: URL, target: GitPushTarget?) async throws {
+    func push(
+        at root: URL,
+        target: GitPushTarget?,
+        sourceRef: String = "HEAD"
+    ) async throws {
         guard let target else {
             throw GitOperationError(
                 command: "git push",
-                message: "GitFork could not resolve a safe push target for the current branch."
+                message: "GitFork could not resolve a safe push target for the branch."
             )
         }
 
-        _ = try await run(Self.pushArguments(for: target), in: root)
+        _ = try await run(
+            Self.pushArguments(for: target, sourceRef: sourceRef),
+            in: root
+        )
     }
 
-    static func pushArguments(for target: GitPushTarget) -> [String] {
+    static func pushArguments(
+        for target: GitPushTarget,
+        sourceRef: String = "HEAD"
+    ) -> [String] {
         var arguments = [
             "-c",
             "remote.\(target.remote).mirror=false",
@@ -946,8 +956,39 @@ struct GitClient: Sendable {
         if target.establishesUpstream {
             arguments.append("--set-upstream")
         }
-        arguments += ["--", target.remote, "HEAD:\(target.remoteRef)"]
+        arguments += ["--", target.remote, "\(sourceRef):\(target.remoteRef)"]
         return arguments
+    }
+
+    /// Resolves the same narrow destination used by current-branch pushes for
+    /// any local branch selected in the sidebar.
+    func pushTarget(
+        at root: URL,
+        for reference: GitReference
+    ) async throws -> GitPushTarget? {
+        guard reference.kind == .localBranch else { return nil }
+
+        if let upstream = reference.upstream {
+            guard upstream.remote != ".",
+                  upstream.remoteRef.hasPrefix("refs/heads/") else {
+                return nil
+            }
+            return GitPushTarget(
+                remote: upstream.remote,
+                remoteRef: upstream.remoteRef,
+                establishesUpstream: false
+            )
+        }
+
+        let remotes = try await run(["remote"], in: root).output
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        guard let remote = remotes.first else { return nil }
+        return GitPushTarget(
+            remote: remote,
+            remoteRef: "refs/heads/\(reference.name)",
+            establishesUpstream: true
+        )
     }
 
     func checkout(at root: URL, reference: GitReference) async throws {

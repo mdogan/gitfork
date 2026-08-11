@@ -223,6 +223,16 @@ struct GitPushTarget: Hashable, Sendable {
     }
 }
 
+/// The exact local branch and remote destination approved by the push UI.
+/// Keeping the source ref in the plan lets sidebar pushes operate on a branch
+/// without checking it out first.
+struct GitPushPlan: Hashable, Sendable {
+    let branchName: String
+    let sourceRef: String
+    let target: GitPushTarget
+    let ahead: Int?
+}
+
 enum StashScope: String, Sendable {
     case staged
     case unstaged

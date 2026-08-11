@@ -44,8 +44,10 @@ struct RepositoryView: View {
                 scope: stashScope
             )
         }
-        .alert("Push \(store.branch)?", isPresented: $store.isConfirmingPush) {
-            Button("Cancel", role: .cancel) {}
+        .alert("Push \(pushBranchName)?", isPresented: $store.isConfirmingPush) {
+            Button("Cancel", role: .cancel) {
+                store.cancelPushConfirmation()
+            }
             Button("Push") {
                 store.push()
             }
@@ -79,22 +81,27 @@ struct RepositoryView: View {
         }
     }
 
+    private var pushBranchName: String {
+        store.pendingPushPlan?.branchName ?? store.branch
+    }
+
     private var pushConfirmationMessage: String {
-        let summary: String
-        if store.ahead > 0 {
-            let plural = store.ahead == 1 ? "commit" : "commits"
-            summary = "\(store.ahead) \(plural) from \(store.branch)"
-        } else {
-            summary = store.branch
+        guard let plan = store.pendingPushPlan else {
+            return "GitFork could not resolve a safe push target."
         }
 
-        if let target = store.pushTarget {
-            let upstreamAction = target.establishesUpstream
-                ? " and set it as the upstream branch"
-                : ""
-            return "This will push \(summary) to \(target.displayName)\(upstreamAction)."
+        let summary: String
+        if let ahead = plan.ahead, ahead > 0 {
+            let plural = ahead == 1 ? "commit" : "commits"
+            summary = "\(ahead) \(plural) from \(plan.branchName)"
+        } else {
+            summary = plan.branchName
         }
-        return "GitFork could not resolve a safe push target."
+
+        let upstreamAction = plan.target.establishesUpstream
+            ? " and set it as the upstream branch"
+            : ""
+        return "This will push \(summary) to \(plan.target.displayName)\(upstreamAction)."
     }
 }
 

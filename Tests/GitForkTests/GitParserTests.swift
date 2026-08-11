@@ -1733,7 +1733,10 @@ struct GitParserTests {
                 ]
         )
         #expect(
-            GitClient.pushArguments(for: firstPush)
+            GitClient.pushArguments(
+                for: firstPush,
+                sourceRef: "refs/heads/feature/safe-push"
+            )
                 == [
                     "-c",
                     "remote.backup.mirror=false",
@@ -1743,7 +1746,7 @@ struct GitParserTests {
                     "--set-upstream",
                     "--",
                     "backup",
-                    "HEAD:refs/heads/feature/safe-push"
+                    "refs/heads/feature/safe-push:refs/heads/feature/safe-push"
                 ]
         )
         #expect(GitClient.fetchArguments() == ["fetch", "--all"])
@@ -2158,6 +2161,86 @@ struct GitParserTests {
             )
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 == "backup/feature/first-push"
+        )
+    }
+
+    @Test
+    @MainActor
+    func pushesANonCurrentLocalBranchWithoutCheckingItOut() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkSidebarPushTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("work")
+        let origin = container.appendingPathComponent("origin.git")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "--bare", origin.path], at: container)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Initial commit"], at: root)
+        try runGit(["remote", "add", "origin", origin.path], at: root)
+        try runGit(["push", "--set-upstream", "origin", "main"], at: root)
+        try runGit(["switch", "-c", "feature/sidebar-push"], at: root)
+        try runGit(["commit", "--allow-empty", "-m", "Sidebar push"], at: root)
+        let featureHead = try runGitOutput(["rev-parse", "HEAD"], at: root)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try runGit(["switch", "main"], at: root)
+
+        let store = RepositoryStore()
+        store.setMonitoringActive(false)
+        store.openRepository(root)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let branch = try #require(
+            store.references.first { $0.name == "feature/sidebar-push" }
+        )
+        #expect(!branch.isCurrent)
+        #expect(branch.upstream == nil)
+
+        store.requestPushConfirmation(for: branch)
+        for _ in 0..<500 {
+            guard !store.isConfirmingPush, store.errorMessage == nil else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let plan = try #require(store.pendingPushPlan)
+        #expect(plan.branchName == "feature/sidebar-push")
+        #expect(plan.sourceRef == "refs/heads/feature/sidebar-push")
+        #expect(plan.target.displayName == "origin/feature/sidebar-push")
+        #expect(plan.target.establishesUpstream)
+        #expect(!store.isLoading)
+
+        store.isConfirmingPush = false
+        store.push()
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(store.errorMessage == nil)
+        #expect(store.branch == "main")
+        #expect(
+            try runGitOutput(
+                ["rev-parse", "refs/heads/feature/sidebar-push"],
+                at: origin
+            )
+                .trimmingCharacters(in: .whitespacesAndNewlines) == featureHead
+        )
+        #expect(
+            try runGitOutput(
+                [
+                    "for-each-ref",
+                    "--format=%(upstream:short)",
+                    "refs/heads/feature/sidebar-push"
+                ],
+                at: root
+            )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                == "origin/feature/sidebar-push"
         )
     }
 

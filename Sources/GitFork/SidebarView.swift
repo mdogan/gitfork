@@ -567,6 +567,13 @@ private struct ReferenceSidebarRow: View {
 
             if reference.kind == .localBranch {
                 Button {
+                    store.requestPushConfirmation(for: reference)
+                } label: {
+                    Label("Push to Remote…", systemImage: "arrow.up.to.line")
+                }
+                .disabled(store.isLoading)
+
+                Button {
                     isRenaming = true
                 } label: {
                     Label("Rename Branch…", systemImage: "pencil")

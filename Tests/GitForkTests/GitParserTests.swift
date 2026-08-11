@@ -2248,6 +2248,46 @@ struct GitParserTests {
 
     @Test
     @MainActor
+    func openingRepositoryChoosesInitialSectionFromWorkingTreeState() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkInitialSectionTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+
+        let readme = root.appendingPathComponent("README.md")
+        try "one\n".write(to: readme, atomically: true, encoding: .utf8)
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+
+        let store = RepositoryStore()
+        store.setMonitoringActive(false)
+        store.openRepository(root)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(!store.isLoading)
+        #expect(store.selectedSection == .history)
+
+        try "two\n".write(to: readme, atomically: true, encoding: .utf8)
+        store.openRepository(root)
+        for _ in 0..<500 {
+            guard store.isLoading else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(!store.isLoading)
+        #expect(store.selectedSection == .changes)
+        #expect(store.selectedChange?.path == "README.md")
+    }
+
+    @Test
+    @MainActor
     func serializesRepositoryOperationsAtTheStoreBoundary() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitForkOperationTests-\(UUID().uuidString)")

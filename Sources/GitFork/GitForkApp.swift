@@ -52,6 +52,12 @@ struct GitForkApp: App {
                 .keyboardShortcut("p")
                 .disabled(store.repositoryURL == nil)
 
+                Button("Open in Ghostty") {
+                    store.openGhosttyTerminal()
+                }
+                .keyboardShortcut("t")
+                .disabled(store.repositoryURL == nil)
+
                 Divider()
 
                 Button("Refresh") { store.refresh() }

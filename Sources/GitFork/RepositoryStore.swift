@@ -243,6 +243,9 @@ final class RepositoryStore: ObservableObject {
             try await self.reload(root: root)
             try Task.checkCancellation()
             guard self.isCurrentRepository(root) else { return }
+            if !self.changes.isEmpty {
+                self.selectChanges()
+            }
             self.startMonitoring(root: root)
         }
     }
@@ -259,6 +262,17 @@ final class RepositoryStore: ObservableObject {
         guard let root = repositoryURL else { return }
         _ = startOperation("Refreshing") {
             try await self.reload(root: root, historyScope: self.historyScope)
+        }
+    }
+
+    func openGhosttyTerminal() {
+        guard let root = repositoryURL else { return }
+        Task {
+            do {
+                try await GhosttyLauncher().openRepository(at: root)
+            } catch {
+                self.show(error)
+            }
         }
     }
 

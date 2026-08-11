@@ -109,6 +109,14 @@ struct RepositoryToolbar: ToolbarContent {
             RepositorySwitcherMenu()
 
             Button {
+                store.openGhosttyTerminal()
+            } label: {
+                Label("Open in Ghostty", systemImage: "apple.terminal")
+            }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+            .help("Open a new Ghostty window at the repository root")
+
+            Button {
                 store.fetch()
             } label: {
                 Label("Fetch", systemImage: "arrow.down.circle")

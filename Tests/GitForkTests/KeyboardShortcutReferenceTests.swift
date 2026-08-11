@@ -15,6 +15,7 @@ struct KeyboardShortcutReferenceTests {
                 KeyboardShortcutReference(action: "File or Directory History", keys: "⌘F"),
                 KeyboardShortcutReference(action: "Open Commit", keys: "⌘G"),
                 KeyboardShortcutReference(action: "Show Changes", keys: "⌘P"),
+                KeyboardShortcutReference(action: "Open in Ghostty", keys: "⌘T"),
                 KeyboardShortcutReference(action: "Refresh", keys: "⌘R"),
                 KeyboardShortcutReference(action: "Keyboard Shortcuts", keys: "?"),
             ]

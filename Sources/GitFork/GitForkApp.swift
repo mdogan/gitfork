@@ -57,6 +57,8 @@ struct RepositoryWindow: View {
             .focusedSceneObject(store)
             .frame(minWidth: 980, minHeight: 640)
             .tint(GitForkTheme.accent)
+            .toolbarBackground(repositoryToolbarColor.opacity(0.22), for: .windowToolbar)
+            .toolbarBackground(.visible, for: .windowToolbar)
             .background(
                 HostingWindowReader { window in
                     guard hostingWindow !== window else { return }
@@ -82,6 +84,13 @@ struct RepositoryWindow: View {
                 store.clearPendingOpenRequest()
                 route(to: request.root)
             }
+    }
+
+    private var repositoryToolbarColor: Color {
+        guard let name = store.repositoryURL?.lastPathComponent else {
+            return GitForkTheme.accent
+        }
+        return GitForkTheme.repositoryColor(for: name)
     }
 
     private func registerWindow() {

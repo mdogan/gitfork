@@ -34,6 +34,16 @@ enum GitForkTheme {
         return identityPalette[Int(hash % UInt64(identityPalette.count))]
     }
 
+    /// Gives each repository name a stable window-toolbar color. Keep the
+    /// redis-server repository on GitFork's original blue accent while other
+    /// names use the same curated deterministic palette as identities.
+    static func repositoryColor(for name: String) -> Color {
+        if name.caseInsensitiveCompare("redis-server") == .orderedSame {
+            return blue
+        }
+        return identityColor(for: name)
+    }
+
     /// Foreground for added diff lines, tuned for legibility in each appearance.
     static func diffAddition(_ scheme: ColorScheme) -> Color {
         scheme == .dark

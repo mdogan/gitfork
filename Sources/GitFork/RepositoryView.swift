@@ -124,6 +124,14 @@ struct RepositoryToolbar: ToolbarContent {
             .help("Open a new Ghostty window at the repository root")
 
             Button {
+                store.openZedEditor()
+            } label: {
+                Label("Open in Zed", systemImage: "chevron.left.forwardslash.chevron.right")
+            }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+            .help("Open the repository in Zed")
+
+            Button {
                 store.fetch()
             } label: {
                 Label("Fetch", systemImage: "arrow.down.circle")

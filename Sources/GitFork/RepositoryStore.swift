@@ -308,6 +308,17 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func openZedEditor() {
+        guard let root = repositoryURL else { return }
+        Task {
+            do {
+                try await ZedLauncher().openRepository(at: root)
+            } catch {
+                self.show(error)
+            }
+        }
+    }
+
     func selectChanges() {
         cancelHistoryPagination()
         selectedSection = .changes

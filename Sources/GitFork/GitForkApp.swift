@@ -185,6 +185,12 @@ struct GitForkCommands: Commands {
             .keyboardShortcut("t")
             .disabled(store?.repositoryURL == nil)
 
+            Button("Open in Zed") {
+                store?.openZedEditor()
+            }
+            .keyboardShortcut("e")
+            .disabled(store?.repositoryURL == nil)
+
             Divider()
 
             Button("Refresh") { store?.refresh() }

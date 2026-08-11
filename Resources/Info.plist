@@ -39,6 +39,8 @@
     <string>14.0</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>GitFork uses Ghostty automation to open a terminal window at the repository root.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

@@ -72,7 +72,6 @@ struct RepositoryView: View {
             }
         }
         .animation(.snappy, value: store.operationLabel)
-        .navigationTitle(store.repositoryName)
         .onAppear {
             store.setMonitoringActive(controlActiveState == .key)
         }
@@ -160,23 +159,11 @@ struct RepositoryToolbar: ToolbarContent {
         }
 
         ToolbarItem(placement: .principal) {
-            HStack(spacing: 7) {
-                Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(GitForkTheme.accent)
-                Text(store.branch)
-                    .font(.subheadline.weight(.semibold))
-
-                if store.ahead > 0 {
-                    Label("\(store.ahead)", systemImage: "arrow.up")
-                        .font(.caption)
-                        .foregroundStyle(GitForkTheme.green)
-                }
-                if store.behind > 0 {
-                    Label("\(store.behind)", systemImage: "arrow.down")
-                        .font(.caption)
-                        .foregroundStyle(GitForkTheme.blue)
-                }
-            }
+            BranchToolbarBadge(
+                branch: store.branch,
+                ahead: store.ahead,
+                behind: store.behind
+            )
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
@@ -208,6 +195,115 @@ struct RepositoryToolbar: ToolbarContent {
             .help("Refresh repository")
             .disabled(store.isLoading)
         }
+    }
+}
+
+struct BranchToolbarBadge: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let branch: String
+    let ahead: Int
+    let behind: Int
+
+    var body: some View {
+        HStack(spacing: 16) {
+            branchIcon
+
+            branchName
+                .font(.system(.body, design: .rounded, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 250, alignment: .leading)
+
+            if ahead > 0 || behind > 0 {
+                HStack(spacing: 5) {
+                    if ahead > 0 {
+                        trackingBadge(
+                            count: ahead,
+                            systemImage: "arrow.up",
+                            color: GitForkTheme.green
+                        )
+                    }
+                    if behind > 0 {
+                        trackingBadge(
+                            count: behind,
+                            systemImage: "arrow.down",
+                            color: GitForkTheme.blue
+                        )
+                    }
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .help(helpText)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Current branch \(branch)")
+        .accessibilityValue(trackingSummary)
+    }
+
+    private var branchIcon: some View {
+        Image(systemName: "arrow.triangle.branch")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(GitForkTheme.accent)
+            .frame(width: 23, height: 23)
+            .background(
+                GitForkTheme.accent.opacity(colorScheme == .dark ? 0.22 : 0.13),
+                in: Circle()
+            )
+            .overlay {
+                Circle()
+                    .strokeBorder(GitForkTheme.accent.opacity(0.24), lineWidth: 0.5)
+            }
+    }
+
+    /// De-emphasize the path and keep the most specific branch component easy
+    /// to scan, without changing or abbreviating the actual branch name.
+    private var branchName: Text {
+        guard let slash = branch.lastIndex(of: "/") else {
+            return Text(branch)
+        }
+
+        let leaf = branch.index(after: slash)
+        return Text(String(branch[...slash]))
+            .foregroundColor(.secondary)
+            + Text(String(branch[leaf...]))
+    }
+
+    private func trackingBadge(
+        count: Int,
+        systemImage: String,
+        color: Color
+    ) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: systemImage)
+                .font(.system(size: 8, weight: .bold))
+            Text("\(count)")
+                .monospacedDigit()
+        }
+        .font(.system(size: 10, weight: .bold, design: .rounded))
+        .foregroundStyle(color)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(color.opacity(colorScheme == .dark ? 0.18 : 0.11), in: Capsule())
+    }
+
+    private var trackingSummary: String {
+        var parts: [String] = []
+        if ahead > 0 {
+            parts.append("\(ahead) ahead")
+        }
+        if behind > 0 {
+            parts.append("\(behind) behind")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private var helpText: String {
+        let status = trackingSummary
+        guard !status.isEmpty else {
+            return "Current branch: \(branch)"
+        }
+        return "Current branch: \(branch) (\(status))"
     }
 }
 

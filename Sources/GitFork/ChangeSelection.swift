@@ -29,6 +29,11 @@ struct ChangeEntry: Hashable, Identifiable, Sendable {
 enum ChangeSelectionKey: Sendable {
     case returnKey
     case deleteKey
+
+    /// The main Return key sends carriage return (U+000D), while the Enter
+    /// key on Apple's numeric keypad sends the distinct enter character
+    /// (U+0003). Treat both as the Changes list's staging key.
+    static let returnCharacters = CharacterSet(charactersIn: "\r\u{3}")
 }
 
 enum ChangeSelectionAction: Sendable {

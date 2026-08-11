@@ -14,7 +14,7 @@ struct GitForkApp: App {
             RepositoryWindow(repository: repository)
         }
         .defaultSize(width: 1380, height: 840)
-        .windowToolbarStyle(.unified)
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             GitForkCommands()
         }
@@ -57,7 +57,7 @@ struct RepositoryWindow: View {
             .focusedSceneObject(store)
             .frame(minWidth: 980, minHeight: 640)
             .tint(GitForkTheme.accent)
-            .toolbarBackground(repositoryToolbarColor.opacity(0.22), for: .windowToolbar)
+            .toolbarBackground(repositoryToolbarBackground, for: .windowToolbar)
             .toolbarBackground(.visible, for: .windowToolbar)
             .background(
                 HostingWindowReader { window in
@@ -91,6 +91,24 @@ struct RepositoryWindow: View {
             return GitForkTheme.accent
         }
         return GitForkTheme.repositoryColor(for: name)
+    }
+
+    /// Resolve the translucent repository tint over the window background so
+    /// split-view separators cannot show through the toolbar.
+    private var repositoryToolbarBackground: Color {
+        let fraction = 0.22
+        let tint = NSColor(repositoryToolbarColor).usingColorSpace(.sRGB)
+        let base = NSColor.windowBackgroundColor.usingColorSpace(.sRGB)
+
+        guard let tint, let base else {
+            return repositoryToolbarColor
+        }
+
+        return Color(
+            red: base.redComponent * (1 - fraction) + tint.redComponent * fraction,
+            green: base.greenComponent * (1 - fraction) + tint.greenComponent * fraction,
+            blue: base.blueComponent * (1 - fraction) + tint.blueComponent * fraction
+        )
     }
 
     private func registerWindow() {

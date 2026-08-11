@@ -208,7 +208,7 @@ private struct ChangeList: View {
             .listStyle(.inset)
             .environment(\.defaultMinListRowHeight, 30)
             .focused($isListFocused)
-            .onKeyPress(.return) {
+            .onKeyPress(characters: ChangeSelectionKey.returnCharacters) { _ in
                 performKeyboardAction(for: .returnKey)
             }
             .onKeyPress(.space) {

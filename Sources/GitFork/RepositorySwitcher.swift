@@ -330,21 +330,27 @@ private struct RepositorySwitcherLabel: View {
     let repositoryName: String
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 10) {
             Image(systemName: "shippingbox.fill")
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(GitForkTheme.accent)
+                .frame(width: 22)
             Text(repositoryName)
-                .font(.subheadline.weight(.semibold))
+                .font(.system(.body, design: .rounded, weight: .semibold))
                 .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 12)
+
             Image(systemName: "chevron.down")
-                .font(.caption2.weight(.semibold))
+                .font(.caption.weight(.bold))
                 .foregroundStyle(isHovering ? GitForkTheme.accent : .secondary)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .frame(maxWidth: 220)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(minWidth: 190, maxWidth: 270, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(
                     isHovering
                         ? GitForkTheme.accent.opacity(colorScheme == .dark ? 0.18 : 0.12)
@@ -352,13 +358,13 @@ private struct RepositorySwitcherLabel: View {
                 )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(
                     isHovering ? GitForkTheme.accent.opacity(0.38) : .clear,
                     lineWidth: 1
                 )
         )
-        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
     }

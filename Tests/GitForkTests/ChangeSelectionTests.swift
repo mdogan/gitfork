@@ -110,6 +110,15 @@ struct ChangeSelectionTests {
     }
 
     @Test
+    func returnCharactersIncludeMainAndNumericKeypadKeys() {
+        let characters = ChangeSelectionKey.returnCharacters
+
+        #expect(characters.contains("\r".unicodeScalars.first!))
+        #expect(characters.contains("\u{3}".unicodeScalars.first!))
+        #expect(!characters.contains(" ".unicodeScalars.first!))
+    }
+
+    @Test
     func refreshFollowsMovedFileWhenOriginalSectionBecomesEmpty() {
         var selection = ChangeSelectionModel()
         selection.select(order[3])

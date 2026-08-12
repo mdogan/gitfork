@@ -1,25 +1,29 @@
 import SwiftUI
 
 enum GitForkTheme {
-    static let accent = Color(red: 0.24, green: 0.55, blue: 0.96)
-    static let blue = Color(red: 0.24, green: 0.55, blue: 0.96)
-    static let green = Color(red: 0.22, green: 0.71, blue: 0.44)
-    static let red = Color(red: 0.88, green: 0.33, blue: 0.33)
-    static let purple = Color(red: 0.58, green: 0.43, blue: 0.84)
-    static let orange = Color(red: 0.95, green: 0.56, blue: 0.24)
+    /// Vivid, high-chroma blue so accented UI reads as deliberate rather than
+    /// as a faint wash. Deeper and more saturated than `blue`, which stays the
+    /// softer hue used for status glyphs and repository identity.
+    static let accent = Color(red: 0.05, green: 0.48, blue: 1.0)
+    static let blue = Color(red: 0.11, green: 0.51, blue: 0.97)
+    static let green = Color(red: 0.09, green: 0.70, blue: 0.37)
+    static let red = Color(red: 0.91, green: 0.21, blue: 0.25)
+    static let purple = Color(red: 0.56, green: 0.30, blue: 0.90)
+    static let orange = Color(red: 0.98, green: 0.52, blue: 0.09)
 
     /// A curated, harmonious palette used to give authors and labels a stable,
-    /// recognizable color. Kept mid-saturation so white glyphs stay legible.
+    /// recognizable color. High chroma so each hue is unmistakable, with value
+    /// held low enough that white glyphs stay legible on top.
     static let identityPalette: [Color] = [
-        Color(red: 0.90, green: 0.35, blue: 0.42),  // rose
-        Color(red: 0.95, green: 0.56, blue: 0.24),  // orange
-        Color(red: 0.89, green: 0.68, blue: 0.24),  // amber
-        Color(red: 0.28, green: 0.72, blue: 0.46),  // green
-        Color(red: 0.20, green: 0.68, blue: 0.66),  // teal
-        Color(red: 0.28, green: 0.56, blue: 0.94),  // blue
-        Color(red: 0.42, green: 0.48, blue: 0.90),  // indigo
-        Color(red: 0.60, green: 0.42, blue: 0.85),  // purple
-        Color(red: 0.90, green: 0.42, blue: 0.68)   // pink
+        Color(red: 0.94, green: 0.22, blue: 0.35),  // rose
+        Color(red: 0.98, green: 0.52, blue: 0.09),  // orange
+        Color(red: 0.87, green: 0.60, blue: 0.05),  // amber
+        Color(red: 0.09, green: 0.70, blue: 0.37),  // green
+        Color(red: 0.02, green: 0.66, blue: 0.63),  // teal
+        Color(red: 0.11, green: 0.51, blue: 0.97),  // blue
+        Color(red: 0.31, green: 0.36, blue: 0.94),  // indigo
+        Color(red: 0.56, green: 0.30, blue: 0.90),  // purple
+        Color(red: 0.94, green: 0.26, blue: 0.64)   // pink
     ]
 
     /// Deterministically maps a seed (e.g. an author name) to a palette color,
@@ -47,15 +51,15 @@ enum GitForkTheme {
     /// Foreground for added diff lines, tuned for legibility in each appearance.
     static func diffAddition(_ scheme: ColorScheme) -> Color {
         scheme == .dark
-            ? Color(red: 0.49, green: 0.86, blue: 0.58)
-            : Color(red: 0.11, green: 0.53, blue: 0.27)
+            ? Color(red: 0.35, green: 0.91, blue: 0.50)
+            : Color(red: 0.04, green: 0.55, blue: 0.21)
     }
 
     /// Foreground for removed diff lines, tuned for legibility in each appearance.
     static func diffDeletion(_ scheme: ColorScheme) -> Color {
         scheme == .dark
-            ? Color(red: 0.96, green: 0.51, blue: 0.51)
-            : Color(red: 0.78, green: 0.18, blue: 0.18)
+            ? Color(red: 1.0, green: 0.42, blue: 0.42)
+            : Color(red: 0.83, green: 0.07, blue: 0.11)
     }
 }
 
@@ -181,24 +185,24 @@ private struct GitForkHoverButtonBody<Label: View>: View {
 
     private var backgroundColor: Color {
         if isPressed && isEnabled {
-            return GitForkTheme.accent.opacity(0.24)
+            return GitForkTheme.accent.opacity(0.32)
         }
 
         switch variant {
         case let .row(isSelected), let .compactRow(isSelected):
             if isSelected {
-                return GitForkTheme.accent.opacity(isHovering ? 0.21 : 0.13)
+                return GitForkTheme.accent.opacity(isHovering ? 0.30 : 0.20)
             }
             return isHovering ? neutralHoverColor : .clear
 
         case .toolbarAction, .icon:
             return isHovering && isEnabled
-                ? GitForkTheme.accent.opacity(0.14)
+                ? GitForkTheme.accent.opacity(0.20)
                 : .clear
 
         case .text:
             return isHovering && isEnabled
-                ? GitForkTheme.accent.opacity(0.12)
+                ? GitForkTheme.accent.opacity(0.18)
                 : .clear
         }
     }
@@ -207,9 +211,9 @@ private struct GitForkHoverButtonBody<Label: View>: View {
         guard isHovering && isEnabled else { return .clear }
         switch variant {
         case .row, .compactRow:
-            return GitForkTheme.accent.opacity(0.24)
+            return GitForkTheme.accent.opacity(0.40)
         case .toolbarAction, .icon, .text:
-            return GitForkTheme.accent.opacity(0.34)
+            return GitForkTheme.accent.opacity(0.55)
         }
     }
 
@@ -224,7 +228,7 @@ extension Color {
         case "A": GitForkTheme.green
         case "D": GitForkTheme.red
         case "R": GitForkTheme.purple
-        case "U": .orange
+        case "U": GitForkTheme.orange
         default: GitForkTheme.blue
         }
     }

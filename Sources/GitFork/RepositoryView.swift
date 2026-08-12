@@ -29,11 +29,7 @@ struct RepositoryView: View {
             DetailView()
         }
         .toolbar {
-            RepositoryToolbar(
-                showingBranchSheet: $showingBranchSheet,
-                showingStashSheet: $showingStashSheet,
-                stashScope: $stashScope
-            )
+            RepositoryToolbar(showingBranchSheet: $showingBranchSheet)
         }
         .sheet(isPresented: $showingBranchSheet) {
             BranchSheet(isPresented: $showingBranchSheet)
@@ -104,60 +100,95 @@ struct RepositoryView: View {
     }
 }
 
+/// Every action lives in one left-hand cluster, grouped by what it touches:
+/// the repository, the outside tools, the remote, then the local branch. The
+/// centered badge is left to say only what HEAD is.
 struct RepositoryToolbar: ToolbarContent {
     @EnvironmentObject private var store: RepositoryStore
     @Binding var showingBranchSheet: Bool
-    @Binding var showingStashSheet: Bool
-    @Binding var stashScope: StashScope
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             RepositorySwitcherMenu()
 
-            Button {
+            ToolbarIconButton(
+                "Open in Ghostty",
+                systemImage: "apple.terminal",
+                help: "Open a new Ghostty window at the repository root (⌘T)"
+            ) {
                 store.openGhosttyTerminal()
-            } label: {
-                Label("Open in Ghostty", systemImage: "apple.terminal")
             }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Open a new Ghostty window at the repository root")
 
-            Button {
+            ToolbarIconButton(
+                "Open in Zed",
+                systemImage: "chevron.left.forwardslash.chevron.right",
+                help: "Open the repository in Zed (⌘E)"
+            ) {
                 store.openZedEditor()
-            } label: {
-                Label("Open in Zed", systemImage: "chevron.left.forwardslash.chevron.right")
             }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Open the repository in Zed")
 
-            Button {
+            ToolbarSeparator()
+
+            ToolbarIconButton(
+                "Fetch",
+                systemImage: "arrow.down.circle",
+                help: "Fetch all remotes"
+            ) {
                 store.fetch()
-            } label: {
-                Label("Fetch", systemImage: "arrow.down.circle")
             }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Fetch all remotes")
             .disabled(store.isLoading)
 
-            Button {
+            ToolbarIconButton(
+                "Pull",
+                systemImage: "arrow.down.to.line",
+                help: "Pull with fast-forward only"
+            ) {
                 store.pull()
-            } label: {
-                Label("Pull", systemImage: "arrow.down.to.line")
             }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Pull with fast-forward only")
             .disabled(store.isLoading)
 
-            Button {
+            ToolbarIconButton(
+                "Push",
+                systemImage: "arrow.up.to.line",
+                help: "Push the current branch"
+            ) {
                 store.requestPushConfirmation()
-            } label: {
-                Label("Push", systemImage: "arrow.up.to.line")
             }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Push the current branch")
+            .disabled(store.isLoading)
+
+            ToolbarSeparator()
+
+            ToolbarIconButton(
+                "New Branch",
+                systemImage: "arrow.triangle.branch",
+                badge: "plus.circle.fill",
+                help: "Create a branch at HEAD"
+            ) {
+                showingBranchSheet = true
+            }
+            .disabled(store.isLoading)
+
+            ToolbarIconButton(
+                "Refresh",
+                systemImage: "arrow.clockwise",
+                help: "Refresh repository (⌘R)"
+            ) {
+                store.refresh()
+            }
             .disabled(store.isLoading)
         }
 
+        // macOS 26 puts a capsule behind every toolbar item. The badge reports
+        // state instead of offering an action, so it drops the capsule and
+        // reads as the title it is.
+        if #available(macOS 26.0, *) {
+            branchItem.sharedBackgroundVisibility(.hidden)
+        } else {
+            branchItem
+        }
+    }
+
+    private var branchItem: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             BranchToolbarBadge(
                 branch: store.branch,
@@ -165,39 +196,66 @@ struct RepositoryToolbar: ToolbarContent {
                 behind: store.behind
             )
         }
-
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button {
-                showingBranchSheet = true
-            } label: {
-                Label("New Branch", systemImage: "arrow.triangle.branch")
-            }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Create a branch")
-            .disabled(store.isLoading)
-
-            Button {
-                stashScope = .all
-                showingStashSheet = true
-            } label: {
-                Label("Stash", systemImage: "archivebox")
-            }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Stash working directory changes")
-            .disabled(store.changes.isEmpty || store.isLoading)
-
-            Button {
-                store.refresh()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
-            .help("Refresh repository")
-            .disabled(store.isLoading)
-        }
     }
 }
 
+/// A toolbar action with a fixed glyph box, so a row of icons keeps an even
+/// rhythm no matter how wide each symbol draws.
+private struct ToolbarIconButton: View {
+    let title: String
+    let systemImage: String
+    let badge: String?
+    let help: String
+    let action: () -> Void
+
+    init(
+        _ title: String,
+        systemImage: String,
+        badge: String? = nil,
+        help: String,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.badge = badge
+        self.help = help
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 21, height: 19)
+                .overlay(alignment: .bottomTrailing) {
+                    if let badge {
+                        Image(systemName: badge)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(GitForkTheme.accent)
+                            .offset(x: 2, y: 2)
+                    }
+                }
+        }
+        .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+        .instantHelp(help)
+        .accessibilityLabel(title)
+    }
+}
+
+/// Separates action clusters inside the single toolbar group.
+private struct ToolbarSeparator: View {
+    var body: some View {
+        Capsule()
+            .fill(.quaternary)
+            .frame(width: 1, height: 15)
+            .padding(.horizontal, 3)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The centered statement of where HEAD is: one glyph, the name, and the
+/// distance from its upstream. A detached HEAD reads as a state with the commit
+/// it sits on, not as a branch with a sentence for a name.
 struct BranchToolbarBadge: View {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -205,86 +263,94 @@ struct BranchToolbarBadge: View {
     let ahead: Int
     let behind: Int
 
+    private var head: BranchDisplay { BranchDisplay(branch) }
+
+    private var tint: Color {
+        head.isDetached ? GitForkTheme.orange : GitForkTheme.accent
+    }
+
     var body: some View {
-        HStack(spacing: 16) {
-            branchIcon
+        HStack(spacing: 7) {
+            Image(systemName: head.isDetached ? "circle.dashed" : "arrow.triangle.branch")
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(tint)
 
-            branchName
-                .font(.system(.body, design: .rounded, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 250, alignment: .leading)
-
-            if ahead > 0 || behind > 0 {
-                HStack(spacing: 5) {
-                    if ahead > 0 {
-                        trackingBadge(
-                            count: ahead,
-                            systemImage: "arrow.up",
-                            color: GitForkTheme.green
-                        )
-                    }
-                    if behind > 0 {
-                        trackingBadge(
-                            count: behind,
-                            systemImage: "arrow.down",
-                            color: GitForkTheme.blue
-                        )
-                    }
+            switch head {
+            case let .branch(name):
+                branchName(name)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 260, alignment: .leading)
+            case let .detached(hash):
+                Text("Detached")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                chip(color: tint) {
+                    Text(hash)
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                 }
+            }
+
+            if ahead > 0 {
+                trackingChip(count: ahead, systemImage: "arrow.up", color: GitForkTheme.green)
+            }
+            if behind > 0 {
+                trackingChip(count: behind, systemImage: "arrow.down", color: GitForkTheme.blue)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .help(helpText)
+        .instantHelp(helpText)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Current branch \(branch)")
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(trackingSummary)
-    }
-
-    private var branchIcon: some View {
-        Image(systemName: "arrow.triangle.branch")
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(GitForkTheme.accent)
-            .frame(width: 23, height: 23)
-            .background(
-                GitForkTheme.accent.opacity(colorScheme == .dark ? 0.22 : 0.13),
-                in: Circle()
-            )
-            .overlay {
-                Circle()
-                    .strokeBorder(GitForkTheme.accent.opacity(0.24), lineWidth: 0.5)
-            }
     }
 
     /// De-emphasize the path and keep the most specific branch component easy
     /// to scan, without changing or abbreviating the actual branch name.
-    private var branchName: Text {
-        guard let slash = branch.lastIndex(of: "/") else {
-            return Text(branch)
+    private func branchName(_ name: String) -> Text {
+        guard let slash = name.lastIndex(of: "/") else {
+            return Text(name)
         }
 
-        let leaf = branch.index(after: slash)
-        return Text(String(branch[...slash]))
+        let leaf = name.index(after: slash)
+        return Text(String(name[...slash]))
             .foregroundColor(.secondary)
-            + Text(String(branch[leaf...]))
+            + Text(String(name[leaf...]))
     }
 
-    private func trackingBadge(
+    private func trackingChip(
         count: Int,
         systemImage: String,
         color: Color
     ) -> some View {
-        HStack(spacing: 2) {
-            Image(systemName: systemImage)
-                .font(.system(size: 8, weight: .bold))
-            Text("\(count)")
-                .monospacedDigit()
+        chip(color: color) {
+            HStack(spacing: 2) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 8, weight: .bold))
+                Text("\(count)")
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
         }
-        .font(.system(size: 10, weight: .bold, design: .rounded))
-        .foregroundStyle(color)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
-        .background(color.opacity(colorScheme == .dark ? 0.18 : 0.11), in: Capsule())
+    }
+
+    /// A chip states a short fact — a hash, a count — so it keeps its ideal
+    /// width instead of wrapping to a second line when the toolbar is tight.
+    private func chip<Content: View>(
+        color: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: true)
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2.5)
+            .background(color.opacity(colorScheme == .dark ? 0.20 : 0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(color.opacity(0.22), lineWidth: 0.5))
+            .layoutPriority(1)
     }
 
     private var trackingSummary: String {
@@ -298,12 +364,22 @@ struct BranchToolbarBadge: View {
         return parts.joined(separator: ", ")
     }
 
-    private var helpText: String {
-        let status = trackingSummary
-        guard !status.isEmpty else {
-            return "Current branch: \(branch)"
+    private var accessibilityLabel: String {
+        switch head {
+        case let .branch(name): "Current branch \(name)"
+        case let .detached(hash): "Detached head at commit \(hash)"
         }
-        return "Current branch: \(branch) (\(status))"
+    }
+
+    private var helpText: String {
+        let subject: String
+        switch head {
+        case let .branch(name): subject = "Current branch: \(name)"
+        case let .detached(hash): subject = "Detached HEAD at commit \(hash)"
+        }
+
+        let status = trackingSummary
+        return status.isEmpty ? subject : "\(subject) (\(status))"
     }
 }
 

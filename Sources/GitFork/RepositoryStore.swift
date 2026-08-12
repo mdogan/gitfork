@@ -776,7 +776,7 @@ final class RepositoryStore: ObservableObject {
             return
         }
         guard let pushTarget else {
-            if branch.hasPrefix("Detached at ") {
+            if BranchDisplay(branch).isDetached {
                 errorMessage = "Create or check out a branch before pushing a detached HEAD."
             } else {
                 errorMessage = """

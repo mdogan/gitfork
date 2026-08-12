@@ -392,6 +392,28 @@ struct GitParserTests {
     }
 
     @Test
+    func readsBranchNameAndDetachedHeadFromStoredHeadDescription() {
+        #expect(BranchDisplay("feature/api") == .branch("feature/api"))
+        #expect(BranchDisplay("feature/api").branchName == "feature/api")
+        #expect(!BranchDisplay("feature/api").isDetached)
+
+        #expect(BranchDisplay("Detached at cb34769a") == .detached(hash: "cb34769a"))
+        #expect(BranchDisplay("Detached at cb34769a").isDetached)
+        #expect(BranchDisplay("Detached at cb34769a").branchName == nil)
+    }
+
+    @Test
+    func roundTripsHeadDescriptionThroughBranchDisplay() {
+        for head in ["main", "Detached at cb34769a", ""] {
+            #expect(BranchDisplay(head).description == head)
+        }
+
+        // A branch literally named like the detached label stays a branch only
+        // when it does not carry the prefix Git-facing code writes.
+        #expect(BranchDisplay("Detached") == .branch("Detached"))
+    }
+
+    @Test
     func parsesUpstreamTrackingOfLocalBranches() throws {
         let tracked = [
             "refs/heads/feature/api",

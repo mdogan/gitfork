@@ -215,7 +215,9 @@ struct GitClient: Sendable {
             branch = branchCommand.output.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             let detached = try await run(["rev-parse", "--short", "HEAD"], in: root)
-            branch = "Detached at \(detached.output.trimmingCharacters(in: .whitespacesAndNewlines))"
+            branch = BranchDisplay.detached(
+                hash: detached.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            ).description
         }
 
         async let upstreamResult = runAllowingFailure(
@@ -1323,7 +1325,7 @@ struct GitClient: Sendable {
         branch: String,
         hasUpstream: Bool
     ) async throws -> GitPushTarget? {
-        guard !branch.hasPrefix("Detached at ") else { return nil }
+        guard !BranchDisplay(branch).isDetached else { return nil }
 
         if hasUpstream {
             async let remoteResult = runAllowingFailure(

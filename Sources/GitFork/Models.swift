@@ -464,6 +464,43 @@ enum ConflictResolutionSide: String, Sendable {
     }
 }
 
+/// What HEAD currently points at, recovered from the single string Git reports
+/// for the current branch. A detached HEAD is a repository state rather than a
+/// branch name, so the UI can present it as one instead of printing a sentence.
+enum BranchDisplay: Equatable, Sendable, CustomStringConvertible {
+    case branch(String)
+    case detached(hash: String)
+
+    static let detachedPrefix = "Detached at "
+
+    init(_ head: String) {
+        guard head.hasPrefix(Self.detachedPrefix) else {
+            self = .branch(head)
+            return
+        }
+        self = .detached(hash: String(head.dropFirst(Self.detachedPrefix.count)))
+    }
+
+    /// The round-trippable description stored in `RepositorySnapshot.branch`.
+    var description: String {
+        switch self {
+        case let .branch(name): name
+        case let .detached(hash): Self.detachedPrefix + hash
+        }
+    }
+
+    var isDetached: Bool {
+        if case .detached = self { return true }
+        return false
+    }
+
+    /// The branch name, or `nil` while HEAD is detached and there is none.
+    var branchName: String? {
+        if case let .branch(name) = self { return name }
+        return nil
+    }
+}
+
 struct RepositorySnapshot: Sendable {
     let root: URL
     let branch: String

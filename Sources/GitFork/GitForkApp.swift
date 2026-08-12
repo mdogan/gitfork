@@ -6,6 +6,14 @@ struct GitForkApp: App {
     static let repositoryWindowID = "repository"
     static let sideBySideDiffWindowID = "side-by-side-diff"
 
+    init() {
+        // Toolbar controls present their own zero-delay tooltips. This shortens
+        // AppKit's roughly one-second wait for the `help(_:)` tooltips the rest
+        // of the UI still uses, so hovering explains a control at the same pace
+        // everywhere.
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 50])
+    }
+
     var body: some Scene {
         WindowGroup(
             id: Self.repositoryWindowID,

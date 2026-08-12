@@ -85,7 +85,7 @@ struct RepositorySwitcherMenu: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize(horizontal: true, vertical: false)
-        .help("Switch repository")
+        .instantHelp("Switch repository (⌘K)")
         .accessibilityLabel("Switch repository")
     }
 
@@ -330,27 +330,26 @@ private struct RepositorySwitcherLabel: View {
     let repositoryName: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             Image(systemName: "shippingbox.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(GitForkTheme.accent)
-                .frame(width: 22)
             Text(repositoryName)
-                .font(.system(.body, design: .rounded, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 5)
 
             Image(systemName: "chevron.down")
-                .font(.caption.weight(.bold))
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(isHovering ? GitForkTheme.accent : .secondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(minWidth: 190, maxWidth: 270, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .frame(maxWidth: 230, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(
                     isHovering
                         ? GitForkTheme.accent.opacity(colorScheme == .dark ? 0.18 : 0.12)
@@ -358,13 +357,13 @@ private struct RepositorySwitcherLabel: View {
                 )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(
                     isHovering ? GitForkTheme.accent.opacity(0.38) : .clear,
                     lineWidth: 1
                 )
         )
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
     }

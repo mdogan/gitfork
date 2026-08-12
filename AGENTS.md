@@ -95,7 +95,12 @@ swift test --disable-sandbox
 
 - Use native SwiftUI and AppKit controls and standard macOS interaction patterns.
 - Use SF Symbols instead of custom raster icons when a suitable symbol exists.
-- Add `.help(...)` tooltips to icon-only and compact action controls.
+- Add `.help(...)` tooltips to icon-only and compact action controls. In the
+  window toolbar, use `.instantHelp(...)` instead: unlabeled icons must explain
+  themselves without AppKit's roughly one-second tooltip delay.
+- Keep window-toolbar actions in the single leading group, ordered by what they
+  touch and separated by `ToolbarSeparator`. The centered badge reports HEAD and
+  carries no actions.
 - Give clickable rows and compact controls a visible hover state with pressed and
   disabled feedback; tooltips alone are not sufficient affordance.
 - Support light mode, dark mode, keyboard navigation, and text selection in

@@ -315,8 +315,8 @@ struct GitClient: Sendable {
         case let .revision(value), let .commit(value):
             revision = value
             path = nil
-        case let .path(value):
-            revision = nil
+        case let .path(value, pathRevision):
+            revision = pathRevision
             path = value
         case .lostAndDangling:
             preconditionFailure("Handled above.")
@@ -348,6 +348,13 @@ struct GitClient: Sendable {
         ]
         if offset > 0 {
             arguments.append("--skip=\(offset)")
+        }
+        if path != nil {
+            // A path history only filters a branch that is already on screen,
+            // so a revision that has since disappeared — or a HEAD that is
+            // still unborn — should come back empty instead of failing the
+            // load with a fatal Git error.
+            arguments.append("--ignore-missing")
         }
         arguments.append(revision ?? "--all")
         if let path {

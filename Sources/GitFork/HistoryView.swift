@@ -19,7 +19,7 @@ struct HistoryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(historyTitle)
                         .font(.headline)
-                    Text("\(commits.count) commits")
+                    Text(historySubtitle(commitCount: commits.count))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -98,19 +98,25 @@ struct HistoryView: View {
     }
 
     private var historyTitle: String {
-        if let reference = store.selectedReference {
-            return reference.name
-        }
         switch store.historyScope {
-        case let .path(path):
+        case let .path(path, _):
             return path
         case let .commit(hash):
             return "Commit \(String(hash.prefix(8)))"
         case .lostAndDangling:
             return "Unreachable Commits"
         case .all, .revision:
-            return "All Commits"
+            return store.selectedReference?.name ?? "All Commits"
         }
+    }
+
+    /// The count line under the title. A path history also names the reference
+    /// it is limited to, because the path alone does not say which branch the
+    /// listed commits come from.
+    private func historySubtitle(commitCount: Int) -> String {
+        let count = "\(commitCount) commits"
+        guard case .path = store.historyScope else { return count }
+        return "\(count) on \(store.pathHistoryReferenceName)"
     }
 
     private var emptyTitle: String {
@@ -143,8 +149,8 @@ struct HistoryView: View {
             return "No commits match your search."
         }
         switch store.historyScope {
-        case let .path(path):
-            return "No commits affect “\(path)” in this repository’s current references."
+        case let .path(path, _):
+            return "No commits on \(store.pathHistoryReferenceName) affect “\(path)”."
         case let .commit(hash):
             return "Commit \(String(hash.prefix(8))) is no longer in this repository."
         case .lostAndDangling:

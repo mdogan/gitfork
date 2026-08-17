@@ -109,9 +109,12 @@ struct PathHistoryPickerSheet: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("File or Directory History")
                             .font(.title2.weight(.semibold))
-                        Text("Choose a tracked path or type a repository-relative path.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                        Text(
+                            "Choose a tracked path or type a repository-relative "
+                                + "path. Commits come from \(store.pathHistoryReferenceName)."
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                     }
                 }
 

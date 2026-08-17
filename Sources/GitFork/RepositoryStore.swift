@@ -535,17 +535,33 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    /// The reference a file or directory history is limited to: the selected
+    /// reference when the sidebar has one, otherwise the checked-out branch.
+    var pathHistoryReferenceName: String {
+        if let selectedReference {
+            return selectedReference.name
+        }
+        return branch.isEmpty ? "HEAD" : branch
+    }
+
+    private var pathHistoryRevision: String {
+        selectedReference?.fullName ?? "HEAD"
+    }
+
+    /// Shows the commits that touch `proposedPath`. The selected reference
+    /// stays selected: a path history narrows the branch already on screen
+    /// rather than searching every ref in the repository.
     func selectPathHistory(_ proposedPath: String) {
         guard let root = repositoryURL,
               let path = RepositoryPathSelection.normalizedSelection(proposedPath) else {
             return
         }
         cancelHistoryPagination()
+        let revision = pathHistoryRevision
         _ = startOperation("Loading history for \(path)") {
             self.selectedStash = nil
-            self.selectedReference = nil
             self.selectedSection = .history
-            self.historyScope = .path(path)
+            self.historyScope = .path(path, revision: revision)
             try await self.reloadHistory(root: root, scope: self.historyScope)
         }
     }

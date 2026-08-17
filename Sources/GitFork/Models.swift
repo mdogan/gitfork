@@ -18,7 +18,10 @@ enum CommitHistoryScope: Equatable, Sendable {
     case all
     case revision(String)
     case commit(String)
-    case path(String)
+    /// Commits touching `path`, limited to the history reachable from
+    /// `revision`. The revision is a full ref name, or `HEAD` when no
+    /// reference is selected.
+    case path(String, revision: String)
     case lostAndDangling
 
     init(revision: String?) {

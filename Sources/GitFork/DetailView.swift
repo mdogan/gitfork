@@ -112,11 +112,17 @@ private enum DiffScrollAnchor: Hashable {
     case top
 }
 
+private enum ChangeDiffMode: Hashable {
+    case stageOrUnstage
+    case plain
+}
+
 struct DetailView: View {
     @EnvironmentObject private var store: RepositoryStore
     @State private var parsedDiff = ParsedUnifiedDiff.empty
     @State private var focusedFileID: Int?
     @State private var scrollToTopToken: UUID?
+    @State private var changeDiffMode = ChangeDiffMode.stageOrUnstage
 
     /// The parsed files, but only once they describe the diff on screen, so the
     /// file chooser never lists the previous selection's files.
@@ -144,7 +150,8 @@ struct DetailView: View {
             } else if let change = store.selectedChange, store.selectedSection == .changes {
                 ChangeHeader(
                     change: change,
-                    staged: store.selectedChangeIsStaged
+                    staged: store.selectedChangeIsStaged,
+                    diffMode: $changeDiffMode
                 )
                 Divider()
                 if change.isConflicted,
@@ -154,9 +161,10 @@ struct DetailView: View {
                     DiffTextView(
                         text: store.diff,
                         parsedDiff: parsedDiff,
-                        change: change,
+                        change: changeDiffMode == .stageOrUnstage ? change : nil,
                         staged: store.selectedChangeIsStaged
                     )
+                    .id(changeDiffMode)
                 }
             } else {
                 ContentUnavailableView(
@@ -404,6 +412,7 @@ private struct ChangeHeader: View {
     @Environment(\.openWindow) private var openWindow
     let change: WorkingChange
     let staged: Bool
+    @Binding var diffMode: ChangeDiffMode
     @State private var isConfirmingFileDiscard = false
     @State private var pendingConflictSide: ConflictResolutionSide?
 
@@ -426,6 +435,24 @@ private struct ChangeHeader: View {
             }
 
             Spacer()
+
+            Button {
+                diffMode = diffMode == .stageOrUnstage ? .plain : .stageOrUnstage
+            } label: {
+                switch diffMode {
+                case .stageOrUnstage:
+                    Label("Plain", systemImage: "doc.plaintext")
+                case .plain:
+                    Label("Stage/Unstage", systemImage: "checklist")
+                }
+            }
+            .buttonStyle(GitForkHoverButtonStyle(.toolbarAction))
+            .help(
+                diffMode == .stageOrUnstage
+                    ? "Show this change as a plain unified diff"
+                    : "Return to the diff with stage and unstage controls"
+            )
+            .disabled(store.diff.isEmpty || change.isConflicted)
 
             Button {
                 if let repositoryURL = store.repositoryURL {
@@ -1009,15 +1036,7 @@ private struct DiffTextView: View {
                 // The preamble is the commit's summary of every file, so it only
                 // belongs to the unfiltered diff.
                 if focusedFile == nil, !document.preambleLines.isEmpty {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(document.preambleLines) { line in
-                            DiffLineView(
-                                line: line,
-                                isRangeSelected: false,
-                                allowsTextSelection: true
-                            )
-                        }
-                    }
+                    CommitDiffLinesView(lines: document.preambleLines)
                 }
 
                 ForEach(visibleFiles) { file in
@@ -1026,15 +1045,7 @@ private struct DiffTextView: View {
             }
             .padding(12)
         } else {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(document.lines) { line in
-                    DiffLineView(
-                        line: line,
-                        isRangeSelected: false,
-                        allowsTextSelection: true
-                    )
-                }
-            }
+            CommitDiffLinesView(lines: document.lines)
             .padding(.bottom, 8)
         }
     }
@@ -1234,6 +1245,13 @@ struct SideBySideDiffWindow: View {
                 value: model.state
             )
         }
+        .onKeyPress(.space) {
+            dismissWindow(
+                id: GitForkApp.sideBySideDiffWindowID,
+                value: model.state
+            )
+            return .handled
+        }
         .alert(
             "Unable to Load Full File",
             isPresented: Binding(
@@ -1253,11 +1271,11 @@ struct SideBySideDiffWindow: View {
 private struct CommitDiffFileView: View {
     let file: UnifiedDiffFile
 
-    private var contentLines: ArraySlice<UnifiedDiffLine> {
+    private var contentLines: [UnifiedDiffLine] {
         if file.lines.first?.text.hasPrefix("diff --git ") == true {
-            return file.lines.dropFirst()
+            return Array(file.lines.dropFirst())
         }
-        return file.lines[...]
+        return file.lines
     }
 
     private var statusColor: Color {
@@ -1295,15 +1313,7 @@ private struct CommitDiffFileView: View {
 
             Divider()
 
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(contentLines) { line in
-                    DiffLineView(
-                        line: line,
-                        isRangeSelected: false,
-                        allowsTextSelection: true
-                    )
-                }
-            }
+            CommitDiffLinesView(lines: contentLines)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .textBackgroundColor))
@@ -1312,6 +1322,77 @@ private struct CommitDiffFileView: View {
             RoundedRectangle(cornerRadius: 7)
                 .strokeBorder(Color.primary.opacity(0.14))
         }
+    }
+}
+
+/// Commit diffs use one native text surface per visual block so selections can
+/// cross row boundaries instead of stopping at each SwiftUI `Text` view.
+private struct CommitDiffLinesView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let lines: [UnifiedDiffLine]
+
+    private var contentHeight: CGFloat {
+        CGFloat(lines.count) * DiffLayout.rowHeight
+    }
+
+    private var contentWidth: CGFloat {
+        let longestLine = lines.lazy.map {
+            characterWidth(of: $0.displayText)
+        }
+        .max() ?? 0
+        return DiffLayout.unifiedTextLeadingInset
+            + CGFloat(longestLine) * DiffLayout.characterWidth
+            + DiffLayout.textPadding
+    }
+
+    private func characterWidth(of text: String) -> Int {
+        text.reduce(0) { width, character in
+            if character == "\t" {
+                return width + 4 - width % 4
+            }
+            return width + (character.isASCII ? 1 : 2)
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(lines) { line in
+                    DiffLineView(
+                        line: line,
+                        isRangeSelected: false,
+                        allowsTextSelection: false,
+                        showsText: false
+                    )
+                }
+            }
+
+            ContinuousDiffTextView(
+                lines: lines.map {
+                    ContinuousDiffTextLine(
+                        text: $0.displayText.isEmpty ? " " : $0.displayText,
+                        kind: $0.kind,
+                        addsSpacingAfter: false
+                    )
+                },
+                style: .unified,
+                colorScheme: colorScheme
+            )
+            .frame(
+                maxWidth: .infinity,
+                minHeight: contentHeight,
+                maxHeight: contentHeight
+            )
+            .padding(.leading, DiffLayout.unifiedTextLeadingInset)
+            .padding(.trailing, DiffLayout.textPadding)
+        }
+        .frame(
+            minWidth: contentWidth,
+            maxWidth: .infinity,
+            minHeight: contentHeight,
+            maxHeight: contentHeight,
+            alignment: .topLeading
+        )
     }
 }
 
@@ -1324,6 +1405,16 @@ private enum DiffLayout {
     static let dividerWidth: CGFloat = 1
     static let minimumSideBySideColumnWidth: CGFloat = 180
     static let sideBySideHeaderHeight: CGFloat = 24
+
+    static let sideBySideTextLeadingInset = accentBarWidth
+        + lineNumberWidth
+        + dividerWidth
+        + textPadding
+
+    static let unifiedTextLeadingInset = accentBarWidth
+        + lineNumberWidth * 2
+        + dividerWidth
+        + textPadding
 
     /// Everything a side-by-side cell draws around its text.
     static let cellChrome = accentBarWidth + lineNumberWidth + dividerWidth + textPadding * 2
@@ -1690,21 +1781,60 @@ private struct SideBySideDiffPane: View {
 }
 
 private struct SideBySideDiffColumn: View {
+    @Environment(\.colorScheme) private var colorScheme
     let diff: SideBySideDiff
     let side: SideBySideDiffSide
     let contentWidth: CGFloat
 
-    var body: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(diff.hunks) { hunk in
-                SideBySideHunkColumnView(
-                    hunk: hunk,
-                    side: side,
-                    contentWidth: contentWidth
-                )
-            }
+    private var contentHeight: CGFloat {
+        diff.hunks.reduce(0) { height, hunk in
+            height
+                + DiffLayout.rowHeight
+                + CGFloat(hunk.rows.count) * DiffLayout.rowHeight
+                + 10
         }
-        .frame(width: contentWidth, alignment: .leading)
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(diff.hunks) { hunk in
+                    SideBySideHunkColumnView(
+                        hunk: hunk,
+                        side: side,
+                        contentWidth: contentWidth
+                    )
+                }
+            }
+
+            ContinuousDiffTextView(
+                lines: diff.columnLines(on: side).map {
+                    ContinuousDiffTextLine(
+                        text: $0.text,
+                        kind: $0.kind,
+                        addsSpacingAfter: $0.addsHunkSpacing
+                    )
+                },
+                style: .sideBySide,
+                colorScheme: colorScheme
+            )
+            .frame(
+                width: max(
+                    contentWidth
+                        - DiffLayout.sideBySideTextLeadingInset
+                        - DiffLayout.textPadding,
+                    0
+                ),
+                height: contentHeight,
+                alignment: .topLeading
+            )
+            .offset(x: DiffLayout.sideBySideTextLeadingInset)
+        }
+        .frame(
+            width: contentWidth,
+            height: contentHeight,
+            alignment: .topLeading
+        )
     }
 }
 
@@ -1719,14 +1849,13 @@ private struct SideBySideHunkColumnView: View {
                 Color.clear
                     .frame(width: DiffLayout.accentBarWidth + DiffLayout.lineNumberWidth)
                 Divider()
-                Text(hunk.header.text)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, DiffLayout.textPadding)
-                    .frame(height: DiffLayout.rowHeight, alignment: .leading)
                 Spacer(minLength: 0)
             }
-            .frame(width: contentWidth, alignment: .leading)
+            .frame(
+                width: contentWidth,
+                height: DiffLayout.rowHeight,
+                alignment: .leading
+            )
             .background(Color.primary.opacity(0.035))
 
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -1745,7 +1874,6 @@ private struct SideBySideHunkColumnView: View {
 }
 
 private struct SideBySideCell: View {
-    @Environment(\.colorScheme) private var colorScheme
     let line: UnifiedDiffLine?
     let side: SideBySideDiffSide
     let width: CGFloat
@@ -1754,16 +1882,6 @@ private struct SideBySideCell: View {
         guard let line else { return "" }
         let number = side == .old ? line.oldLineNumber : line.newLineNumber
         return number.map(String.init) ?? ""
-    }
-
-    private var foreground: Color {
-        guard let line else { return .clear }
-        switch line.kind {
-        case .addition: return GitForkTheme.diffAddition(colorScheme)
-        case .deletion: return GitForkTheme.diffDeletion(colorScheme)
-        case .noNewline: return .secondary
-        default: return .primary
-        }
     }
 
     private var background: Color {
@@ -1802,18 +1920,110 @@ private struct SideBySideCell: View {
 
             Divider()
 
-            Text(line?.displayText ?? "")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(foreground)
-                .textSelection(.enabled)
-                .lineLimit(1)
-                .padding(.horizontal, DiffLayout.textPadding)
-                .frame(height: DiffLayout.rowHeight, alignment: .leading)
-
             Spacer(minLength: 0)
         }
         .frame(width: width, height: DiffLayout.rowHeight, alignment: .leading)
         .background(background)
+    }
+}
+
+private struct ContinuousDiffTextLine: Equatable {
+    let text: String
+    let kind: UnifiedDiffLineKind
+    let addsSpacingAfter: Bool
+}
+
+private enum ContinuousDiffTextStyle {
+    case sideBySide
+    case unified
+}
+
+/// A single AppKit text surface for a visual diff block. SwiftUI selections
+/// stop at each `Text` boundary, while one `NSTextView` supports normal native
+/// selection across lines and hunks.
+private struct ContinuousDiffTextView: NSViewRepresentable {
+    let lines: [ContinuousDiffTextLine]
+    let style: ContinuousDiffTextStyle
+    let colorScheme: ColorScheme
+
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView(frame: .zero)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.lineBreakMode = .byClipping
+        textView.textContainer?.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = false
+        textView.allowsUndo = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.usesFindPanel = true
+        return textView
+    }
+
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        let content = attributedContent
+        guard !textView.attributedString().isEqual(to: content) else { return }
+
+        let selection = textView.selectedRange()
+        textView.textStorage?.setAttributedString(content)
+        if NSMaxRange(selection) <= content.length {
+            textView.setSelectedRange(selection)
+        }
+    }
+
+    private var attributedContent: NSAttributedString {
+        let content = NSMutableAttributedString()
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+
+        for line in lines {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.minimumLineHeight = DiffLayout.rowHeight
+            paragraph.maximumLineHeight = DiffLayout.rowHeight
+            paragraph.paragraphSpacing = line.addsSpacingAfter ? 10 : 0
+            paragraph.defaultTabInterval = DiffLayout.characterWidth * 4
+            paragraph.lineBreakMode = .byClipping
+
+            content.append(
+                NSAttributedString(
+                    string: line.text + "\n",
+                    attributes: [
+                        .font: font,
+                        .foregroundColor: foregroundColor(for: line),
+                        .paragraphStyle: paragraph
+                    ]
+                )
+            )
+        }
+
+        return content
+    }
+
+    private func foregroundColor(for line: ContinuousDiffTextLine) -> NSColor {
+        switch line.kind {
+        case .addition:
+            NSColor(GitForkTheme.diffAddition(colorScheme))
+        case .deletion:
+            NSColor(GitForkTheme.diffDeletion(colorScheme))
+        case .hunkHeader:
+            style == .unified ? NSColor(GitForkTheme.blue) : .secondaryLabelColor
+        default:
+            if style == .unified,
+               line.text.hasPrefix("diff ") || line.text.hasPrefix("commit ") {
+                NSColor(GitForkTheme.purple)
+            } else if style == .sideBySide, line.kind == .noNewline {
+                .secondaryLabelColor
+            } else {
+                .labelColor
+            }
+        }
     }
 }
 
@@ -1822,6 +2032,7 @@ private struct DiffLineView: View {
     let line: UnifiedDiffLine
     let isRangeSelected: Bool
     let allowsTextSelection: Bool
+    var showsText = true
 
     private var foreground: Color {
         if line.kind == .addition { return GitForkTheme.diffAddition(colorScheme) }
@@ -1860,18 +2071,24 @@ private struct DiffLineView: View {
 
             Divider()
 
-            Group {
-                if allowsTextSelection {
-                    Text(displayText.isEmpty ? " " : displayText)
-                        .textSelection(.enabled)
-                } else {
-                    Text(displayText.isEmpty ? " " : displayText)
+            if showsText {
+                Group {
+                    if allowsTextSelection {
+                        Text(displayText.isEmpty ? " " : displayText)
+                            .textSelection(.enabled)
+                    } else {
+                        Text(displayText.isEmpty ? " " : displayText)
+                    }
                 }
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(foreground)
+                    .padding(.horizontal, DiffLayout.textPadding)
+                    .frame(height: DiffLayout.rowHeight, alignment: .leading)
+            } else {
+                Color.clear
+                    .padding(.horizontal, DiffLayout.textPadding)
+                    .frame(height: DiffLayout.rowHeight)
             }
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(foreground)
-                .padding(.horizontal, DiffLayout.textPadding)
-                .frame(height: DiffLayout.rowHeight, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(background)

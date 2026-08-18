@@ -25,6 +25,15 @@ struct SideBySideDiffHunk: Identifiable, Equatable, Sendable {
     let selectableLineIDs: Set<Int>
 }
 
+/// One visual line in a side-by-side column's continuous text surface.
+/// Keeping filler rows here preserves alignment while allowing one native text
+/// selection to extend across every displayed line and hunk.
+struct SideBySideDiffColumnLine: Equatable, Sendable {
+    let text: String
+    let kind: UnifiedDiffLineKind
+    let addsHunkSpacing: Bool
+}
+
 /// A unified diff re-laid out as two aligned columns: the old version of a file
 /// on the left and the new version on the right.
 ///
@@ -45,6 +54,27 @@ struct SideBySideDiff: Equatable, Sendable {
 
     var rowCount: Int {
         hunks.reduce(0) { $0 + $1.rows.count }
+    }
+
+    func columnLines(on side: SideBySideDiffSide) -> [SideBySideDiffColumnLine] {
+        hunks.flatMap { hunk in
+            var lines = [
+                SideBySideDiffColumnLine(
+                    text: hunk.header.text,
+                    kind: hunk.header.kind,
+                    addsHunkSpacing: hunk.rows.isEmpty
+                )
+            ]
+            lines.append(contentsOf: hunk.rows.enumerated().map { index, row in
+                let line = row.line(side)
+                return SideBySideDiffColumnLine(
+                    text: line?.displayText ?? "",
+                    kind: line?.kind ?? .context,
+                    addsHunkSpacing: index == hunk.rows.indices.last
+                )
+            })
+            return lines
+        }
     }
 
     init(_ document: UnifiedDiff) {

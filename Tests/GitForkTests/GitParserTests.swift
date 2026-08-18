@@ -217,6 +217,37 @@ struct GitParserTests {
     }
 
     @Test
+    func buildsContinuousSideBySideColumnTextAcrossRowsAndHunks() {
+        let diff = """
+        diff --git a/file.swift b/file.swift
+        --- a/file.swift
+        +++ b/file.swift
+        @@ -1,2 +1,2 @@
+         shared
+        -old
+        +new
+        @@ -8 +8,2 @@
+        +inserted
+         trailing
+        """
+        let sideBySide = SideBySideDiff(UnifiedDiff(diff))
+
+        let oldLines = sideBySide.columnLines(on: .old)
+        let newLines = sideBySide.columnLines(on: .new)
+
+        #expect(oldLines.map(\.text) == [
+            "@@ -1,2 +1,2 @@", "shared", "old",
+            "@@ -8 +8,2 @@", "", "trailing"
+        ])
+        #expect(newLines.map(\.text) == [
+            "@@ -1,2 +1,2 @@", "shared", "new",
+            "@@ -8 +8,2 @@", "inserted", "trailing"
+        ])
+        #expect(oldLines.filter(\.addsHunkSpacing).map(\.text) == ["old", "trailing"])
+        #expect(newLines.filter(\.addsHunkSpacing).map(\.text) == ["new", "trailing"])
+    }
+
+    @Test
     func keepsMissingNewlineMarkerOnTheVersionThatOwnsIt() throws {
         let diff = """
         diff --git a/file.swift b/file.swift

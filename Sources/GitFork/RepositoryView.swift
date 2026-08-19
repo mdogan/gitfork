@@ -127,6 +127,14 @@ struct RepositoryToolbar: ToolbarContent {
                 store.openZedEditor()
             }
 
+            ToolbarIconButton(
+                "Open in Finder",
+                systemImage: "folder",
+                help: "Reveal the repository root in Finder (⇧⌘R)"
+            ) {
+                store.openInFinder()
+            }
+
             ToolbarSeparator()
 
             ToolbarIconButton(

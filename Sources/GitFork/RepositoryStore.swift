@@ -325,6 +325,11 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func openInFinder() {
+        guard let root = repositoryURL else { return }
+        NSWorkspace.shared.open(root)
+    }
+
     func selectChanges() {
         cancelHistoryPagination()
         selectedSection = .changes

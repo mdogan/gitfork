@@ -223,6 +223,12 @@ struct GitForkCommands: Commands {
             .keyboardShortcut("e")
             .disabled(store?.repositoryURL == nil)
 
+            Button("Open in Finder") {
+                store?.openInFinder()
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(store?.repositoryURL == nil)
+
             Divider()
 
             Button("Refresh") { store?.refresh() }

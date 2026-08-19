@@ -13,6 +13,7 @@ struct KeyboardShortcutReferenceTests {
                 KeyboardShortcutReference(action: "New Window", keys: "⌘N"),
                 KeyboardShortcutReference(action: "Open Repository", keys: "⌘O"),
                 KeyboardShortcutReference(action: "Switch Repository", keys: "⌘K"),
+                KeyboardShortcutReference(action: "Select Branch", keys: "⌘B"),
                 KeyboardShortcutReference(action: "File or Directory History", keys: "⌘F"),
                 KeyboardShortcutReference(action: "Open Commit", keys: "⌘G"),
                 KeyboardShortcutReference(action: "Show Changes", keys: "⌘P"),

@@ -187,6 +187,12 @@ struct GitForkCommands: Commands {
             .keyboardShortcut("k")
             .disabled(store == nil)
 
+            Button("Select Branch…") {
+                store?.showBranchPicker()
+            }
+            .keyboardShortcut("b")
+            .disabled(store?.repositoryURL == nil)
+
             Button("File or Directory History…") {
                 store?.showPathHistoryPicker()
             }
@@ -275,6 +281,10 @@ struct RootView: View {
         }
         .sheet(isPresented: $store.isShowingRepositorySwitcher) {
             RepositorySwitcherSheet()
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $store.isShowingBranchPicker) {
+            BranchPickerSheet()
                 .environmentObject(store)
         }
         .sheet(isPresented: $store.isShowingPathHistoryPicker) {

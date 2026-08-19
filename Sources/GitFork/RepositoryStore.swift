@@ -44,6 +44,7 @@ final class RepositoryStore: ObservableObject {
     @Published var isConfirmingPush = false
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
+    @Published var isShowingBranchPicker = false
     @Published var isShowingPathHistoryPicker = false
     @Published var isShowingCommitHashPicker = false
     @Published var isShowingKeyboardShortcuts = false
@@ -195,6 +196,11 @@ final class RepositoryStore: ObservableObject {
     func showCommitHashPicker() {
         guard repositoryURL != nil else { return }
         isShowingCommitHashPicker = true
+    }
+
+    func showBranchPicker() {
+        guard repositoryURL != nil else { return }
+        isShowingBranchPicker = true
     }
 
     /// Resolves a hash without changing what the window shows, so the commit
@@ -1427,6 +1433,7 @@ final class RepositoryStore: ObservableObject {
         repositoryPathLoadID = nil
         repositoryPathItems = []
         isLoadingRepositoryPaths = false
+        isShowingBranchPicker = false
         isShowingPathHistoryPicker = false
         isShowingCommitHashPicker = false
         commitReveal = nil

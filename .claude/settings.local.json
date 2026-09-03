@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(swift build *)",
+      "Bash(codesign *)",
+      "Bash(swift test *)",
+      "Bash(git -C /Users/mm/Projects/dogan.io/gitfork diff --check)",
+      "Bash(git -C /Users/mm/Projects/dogan.io/gitfork diff --stat)",
+      "Bash(git -C /Users/mm/Projects/dogan.io/gitfork status --short)"
+    ]
+  }
+}

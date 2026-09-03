@@ -111,6 +111,10 @@ struct RepositoryToolbar: ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             RepositorySwitcherMenu()
 
+            if WorktreeSwitcherOptions.shouldShow(for: store.worktrees) {
+                WorktreeSwitcherMenu()
+            }
+
             ToolbarIconButton(
                 "Open in Ghostty",
                 systemImage: "apple.terminal",

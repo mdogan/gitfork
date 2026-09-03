@@ -53,6 +53,36 @@ enum RepositorySwitcherNavigation {
     }
 }
 
+enum WorktreeSwitcherOptions {
+    static func selectable(from worktrees: [GitWorktree]) -> [GitWorktree] {
+        worktrees.filter { !$0.isBare && !$0.isPrunable }
+    }
+
+    static func shouldShow(for worktrees: [GitWorktree]) -> Bool {
+        selectable(from: worktrees).count > 1
+    }
+
+    static func current(in worktrees: [GitWorktree]) -> GitWorktree? {
+        selectable(from: worktrees).first(where: \.isCurrent)
+    }
+
+    static func currentLabel(for worktree: GitWorktree?) -> String {
+        guard let worktree else { return "Worktrees" }
+        return worktree.branchName ?? (worktree.isDetached ? "Detached" : worktree.displayName)
+    }
+
+    static func optionLabel(for worktree: GitWorktree) -> String {
+        let location = worktree.displayName
+        if let branch = worktree.branchName {
+            return "\(branch) — \(location)"
+        }
+        if worktree.isDetached, let head = worktree.head {
+            return "Detached at \(head.prefix(8)) — \(location)"
+        }
+        return location
+    }
+}
+
 struct RepositorySwitcherMenu: View {
     @EnvironmentObject private var store: RepositoryStore
 
@@ -98,6 +128,53 @@ struct RepositorySwitcherMenu: View {
         return parent.isEmpty
             ? repository.lastPathComponent
             : "\(repository.lastPathComponent) — \(parent)"
+    }
+}
+
+struct WorktreeSwitcherMenu: View {
+    @EnvironmentObject private var store: RepositoryStore
+
+    private var worktrees: [GitWorktree] {
+        WorktreeSwitcherOptions.selectable(from: store.worktrees)
+    }
+
+    private var currentWorktree: GitWorktree? {
+        WorktreeSwitcherOptions.current(in: worktrees)
+    }
+
+    var body: some View {
+        Menu {
+            Section("Worktrees") {
+                ForEach(worktrees) { worktree in
+                    Button {
+                        open(worktree)
+                    } label: {
+                        Label(
+                            WorktreeSwitcherOptions.optionLabel(for: worktree),
+                            systemImage: worktree.isCurrent ? "checkmark" : "rectangle.stack"
+                        )
+                    }
+                }
+            }
+        } label: {
+            WorktreeSwitcherLabel(
+                title: WorktreeSwitcherOptions.currentLabel(for: currentWorktree)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: true, vertical: false)
+        .instantHelp("Switch worktree")
+        .accessibilityLabel("Switch worktree")
+        .accessibilityValue(
+            currentWorktree.map(WorktreeSwitcherOptions.optionLabel(for:)) ?? ""
+        )
+    }
+
+    private func open(_ worktree: GitWorktree) {
+        guard !worktree.isCurrent else { return }
+        store.requestOpenRepository(
+            URL(fileURLWithPath: worktree.path, isDirectory: true)
+        )
     }
 }
 
@@ -348,6 +425,50 @@ private struct RepositorySwitcherLabel: View {
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
         .frame(maxWidth: 230, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(
+                    isHovering
+                        ? GitForkTheme.accent.opacity(colorScheme == .dark ? 0.18 : 0.12)
+                        : .clear
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(
+                    isHovering ? GitForkTheme.accent.opacity(0.38) : .clear,
+                    lineWidth: 1
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+}
+
+private struct WorktreeSwitcherLabel: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovering = false
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "rectangle.stack")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(GitForkTheme.accent)
+
+            Text(title)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(isHovering ? GitForkTheme.accent : .secondary)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .frame(maxWidth: 190, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(

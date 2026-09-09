@@ -112,6 +112,11 @@ swift test --disable-sandbox
   a narrow strip.
 - A short diff must also fill the viewport height and remain aligned to
   `.topLeading`; do not allow bidirectional scrolling to center it vertically.
+- The changes view wraps diff text in both plain and stage/unstage modes and
+  scrolls vertically only; history diffs keep horizontal scrolling. Wrapped
+  rows are measured with the same TextKit layout the text is drawn with, so the
+  line-number gutter, row backgrounds, and line selection stay aligned when a
+  line spans several visual rows.
 - Repository switching uses the persisted `recentRepositories` list. Clearly
   mark the active repository and retain an “Open Other Repository…” action.
 - Each window owns a `RepositoryStore` and shows one repository, and one

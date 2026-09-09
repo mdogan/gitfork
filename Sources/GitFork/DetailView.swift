@@ -162,7 +162,8 @@ struct DetailView: View {
                         text: store.diff,
                         parsedDiff: parsedDiff,
                         change: changeDiffMode == .stageOrUnstage ? change : nil,
-                        staged: store.selectedChangeIsStaged
+                        staged: store.selectedChangeIsStaged,
+                        wrapsLines: true
                     )
                     .id(changeDiffMode)
                 }
@@ -893,10 +894,14 @@ private struct DiffTextView: View {
     let parsedDiff: ParsedUnifiedDiff
     var change: WorkingChange?
     var staged = false
+    /// Wrapped diffs give up horizontal scrolling: a long line folds into more
+    /// visual rows instead of running past the pane.
+    var wrapsLines = false
     var focusedFileID: Int?
     var scrollToTopToken: UUID?
 
     @State private var showsLargeDiff = false
+    @State private var wrappedContentWidth: CGFloat = 0
     @State private var selectedDisplayLineIDs: Set<Int> = []
     @State private var selectedHunkID: Int?
     @State private var pendingDiscardLineIDs: Set<Int>?
@@ -952,13 +957,19 @@ private struct DiffTextView: View {
             } else {
                 GeometryReader { viewport in
                     ScrollViewReader { proxy in
-                        ScrollView([.horizontal, .vertical]) {
-                            diffContent
+                        ScrollView(wrapsLines ? .vertical : [.horizontal, .vertical]) {
+                            diffContent(
+                                availableWidth: wrappedContentWidth > 0
+                                    ? wrappedContentWidth
+                                    : viewport.size.width
+                            )
                                 .frame(
-                                    minWidth: viewport.size.width,
+                                    minWidth: wrapsLines ? nil : viewport.size.width,
+                                    maxWidth: wrapsLines ? .infinity : nil,
                                     minHeight: viewport.size.height,
                                     alignment: .topLeading
                                 )
+                                .background { contentWidthReader }
                                 // Tagging the whole content gives "Scroll to
                                 // Top" a target in every diff layout.
                                 .id(DiffScrollAnchor.top)
@@ -1004,8 +1015,23 @@ private struct DiffTextView: View {
         }
     }
 
+    /// Wrapped text has to fit the width the reader actually sees, and a
+    /// legacy scroller eats part of the viewport, so the content measures
+    /// itself instead of trusting the enclosing geometry.
     @ViewBuilder
-    private var diffContent: some View {
+    private var contentWidthReader: some View {
+        if wrapsLines {
+            GeometryReader { proxy in
+                Color.clear
+                    .onChange(of: proxy.size.width, initial: true) { _, width in
+                        wrappedContentWidth = width
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func diffContent(availableWidth: CGFloat) -> some View {
         if change != nil,
            change?.isConflicted != true,
            !document.displayHunks.isEmpty {
@@ -1017,6 +1043,8 @@ private struct DiffTextView: View {
                             ? selectedDisplayLineIDs
                             : [],
                         staged: staged,
+                        wraps: wrapsLines,
+                        containerWidth: availableWidth,
                         isLoading: store.isLoading || isPreparingReplacement,
                         selectRange: { lineIDs in
                             selectedHunkID = hunk.id
@@ -1032,20 +1060,33 @@ private struct DiffTextView: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 8)
         } else if !document.files.isEmpty {
+            let fileWidth = availableWidth - DiffLayout.filePadding * 2
             LazyVStack(alignment: .leading, spacing: 16) {
                 // The preamble is the commit's summary of every file, so it only
                 // belongs to the unfiltered diff.
                 if focusedFile == nil, !document.preambleLines.isEmpty {
-                    CommitDiffLinesView(lines: document.preambleLines)
+                    CommitDiffLinesView(
+                        lines: document.preambleLines,
+                        wraps: wrapsLines,
+                        containerWidth: fileWidth
+                    )
                 }
 
                 ForEach(visibleFiles) { file in
-                    CommitDiffFileView(file: file)
+                    CommitDiffFileView(
+                        file: file,
+                        wraps: wrapsLines,
+                        containerWidth: fileWidth
+                    )
                 }
             }
-            .padding(12)
+            .padding(DiffLayout.filePadding)
         } else {
-            CommitDiffLinesView(lines: document.lines)
+            CommitDiffLinesView(
+                lines: document.lines,
+                wraps: wrapsLines,
+                containerWidth: availableWidth
+            )
             .padding(.bottom, 8)
         }
     }
@@ -1270,6 +1311,8 @@ struct SideBySideDiffWindow: View {
 
 private struct CommitDiffFileView: View {
     let file: UnifiedDiffFile
+    var wraps = false
+    var containerWidth: CGFloat = 0
 
     private var contentLines: [UnifiedDiffLine] {
         if file.lines.first?.text.hasPrefix("diff --git ") == true {
@@ -1289,6 +1332,8 @@ private struct CommitDiffFileView: View {
                     .foregroundStyle(GitForkTheme.blue)
                 Text(file.path)
                     .font(.callout.monospaced().weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .textSelection(.enabled)
                 Text(file.change.title)
                     .font(.caption2.weight(.bold))
@@ -1313,7 +1358,11 @@ private struct CommitDiffFileView: View {
 
             Divider()
 
-            CommitDiffLinesView(lines: contentLines)
+            CommitDiffLinesView(
+                lines: contentLines,
+                wraps: wraps,
+                containerWidth: containerWidth
+            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .textBackgroundColor))
@@ -1330,9 +1379,31 @@ private struct CommitDiffFileView: View {
 private struct CommitDiffLinesView: View {
     @Environment(\.colorScheme) private var colorScheme
     let lines: [UnifiedDiffLine]
+    var wraps = false
+    var containerWidth: CGFloat = 0
 
-    private var contentHeight: CGFloat {
-        CGFloat(lines.count) * DiffLayout.rowHeight
+    private var textLines: [ContinuousDiffTextLine] {
+        lines.map {
+            ContinuousDiffTextLine(
+                text: $0.displayText.isEmpty ? " " : $0.displayText,
+                kind: $0.kind,
+                addsSpacingAfter: false
+            )
+        }
+    }
+
+    private var textWidth: CGFloat {
+        DiffLayout.wrappedTextWidth(in: containerWidth)
+    }
+
+    private var metrics: DiffRowMetrics {
+        guard wraps else { return DiffRowMetrics(rowCount: lines.count) }
+        return DiffRowMetrics(
+            heights: WrappedDiffLayout.shared.rowHeights(
+                for: textLines,
+                width: textWidth
+            )
+        )
     }
 
     private var contentWidth: CGFloat {
@@ -1355,43 +1426,56 @@ private struct CommitDiffLinesView: View {
     }
 
     var body: some View {
+        let metrics = self.metrics
+        let contentHeight = metrics.totalHeight
         ZStack(alignment: .topLeading) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(lines) { line in
+                ForEach(lines.indices, id: \.self) { index in
                     DiffLineView(
-                        line: line,
+                        line: lines[index],
                         isRangeSelected: false,
                         allowsTextSelection: false,
-                        showsText: false
+                        showsText: false,
+                        height: metrics.height(at: index)
                     )
                 }
             }
 
-            ContinuousDiffTextView(
-                lines: lines.map {
-                    ContinuousDiffTextLine(
-                        text: $0.displayText.isEmpty ? " " : $0.displayText,
-                        kind: $0.kind,
-                        addsSpacingAfter: false
+            if wraps {
+                textSurface
+                    .frame(
+                        width: textWidth,
+                        height: contentHeight,
+                        alignment: .topLeading
                     )
-                },
-                style: .unified,
-                colorScheme: colorScheme
-            )
-            .frame(
-                maxWidth: .infinity,
-                minHeight: contentHeight,
-                maxHeight: contentHeight
-            )
-            .padding(.leading, DiffLayout.unifiedTextLeadingInset)
-            .padding(.trailing, DiffLayout.textPadding)
+                    .padding(.leading, DiffLayout.unifiedTextLeadingInset)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            } else {
+                textSurface
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: contentHeight,
+                        maxHeight: contentHeight
+                    )
+                    .padding(.leading, DiffLayout.unifiedTextLeadingInset)
+                    .padding(.trailing, DiffLayout.textPadding)
+            }
         }
         .frame(
-            minWidth: contentWidth,
+            minWidth: wraps ? nil : contentWidth,
             maxWidth: .infinity,
             minHeight: contentHeight,
             maxHeight: contentHeight,
             alignment: .topLeading
+        )
+    }
+
+    private var textSurface: ContinuousDiffTextView {
+        ContinuousDiffTextView(
+            lines: textLines,
+            style: .unified,
+            colorScheme: colorScheme,
+            wraps: wraps
         )
     }
 }
@@ -1405,6 +1489,8 @@ private enum DiffLayout {
     static let dividerWidth: CGFloat = 1
     static let minimumSideBySideColumnWidth: CGFloat = 180
     static let sideBySideHeaderHeight: CGFloat = 24
+    /// Gap the file cards leave around a commit-style diff block.
+    static let filePadding: CGFloat = 12
 
     static let sideBySideTextLeadingInset = accentBarWidth
         + lineNumberWidth
@@ -1419,12 +1505,167 @@ private enum DiffLayout {
     /// Everything a side-by-side cell draws around its text.
     static let cellChrome = accentBarWidth + lineNumberWidth + dividerWidth + textPadding * 2
 
+    static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+
     /// Width of one monospaced character in the diff font, used to size the
     /// side-by-side columns so long lines scroll instead of wrapping.
-    static let characterWidth = NSFont
-        .monospacedSystemFont(ofSize: 12, weight: .regular)
-        .maximumAdvancement
-        .width
+    static let characterWidth = font.maximumAdvancement.width
+
+    /// Text width left inside a wrapped block once the gutter and padding are
+    /// taken out. Rounded down so the measured layout and the drawn layout wrap
+    /// at exactly the same column.
+    static func wrappedTextWidth(in containerWidth: CGFloat) -> CGFloat {
+        let available = containerWidth - unifiedTextLeadingInset - textPadding
+        return max(available, characterWidth * 8).rounded(.down)
+    }
+
+    /// One paragraph style for the drawn text and for the measurement behind
+    /// the gutter, so both agree on where every line breaks and how tall each
+    /// visual row is.
+    static func paragraphStyle(addsSpacingAfter: Bool, wraps: Bool) -> NSParagraphStyle {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = rowHeight
+        paragraph.maximumLineHeight = rowHeight
+        paragraph.paragraphSpacing = addsSpacingAfter ? 10 : 0
+        paragraph.defaultTabInterval = characterWidth * 4
+        paragraph.lineBreakMode = wraps ? .byWordWrapping : .byClipping
+        return paragraph
+    }
+}
+
+/// Row geometry for one diff block. A wrapped line covers several visual rows,
+/// so hit testing and selection walk cumulative offsets instead of multiplying
+/// by a fixed row height.
+private struct DiffRowMetrics {
+    private let rowCount: Int
+    /// Cumulative row tops, `nil` while every row is one `rowHeight` tall.
+    private let tops: [CGFloat]?
+
+    init(rowCount: Int) {
+        self.rowCount = rowCount
+        tops = nil
+    }
+
+    init(heights: [CGFloat]) {
+        rowCount = heights.count
+        var tops: [CGFloat] = [0]
+        tops.reserveCapacity(heights.count + 1)
+        for height in heights {
+            tops.append(tops[tops.count - 1] + height)
+        }
+        self.tops = tops
+    }
+
+    var totalHeight: CGFloat {
+        offset(of: rowCount)
+    }
+
+    func offset(of index: Int) -> CGFloat {
+        let clamped = min(max(index, 0), rowCount)
+        guard let tops else { return CGFloat(clamped) * DiffLayout.rowHeight }
+        return tops[clamped]
+    }
+
+    func height(at index: Int) -> CGFloat {
+        offset(of: index + 1) - offset(of: index)
+    }
+
+    func height(of range: ClosedRange<Int>) -> CGFloat {
+        offset(of: range.upperBound + 1) - offset(of: range.lowerBound)
+    }
+
+    func index(at yPosition: CGFloat) -> Int {
+        guard rowCount > 0 else { return 0 }
+        guard let tops else {
+            let rawIndex = Int(floor(yPosition / DiffLayout.rowHeight))
+            return min(max(rawIndex, 0), rowCount - 1)
+        }
+        var low = 0
+        var high = rowCount - 1
+        while low < high {
+            let middle = (low + high) / 2
+            if yPosition < tops[middle + 1] {
+                high = middle
+            } else {
+                low = middle + 1
+            }
+        }
+        return low
+    }
+}
+
+/// The gutter draws one row per logical line while the text surface wraps, so
+/// both have to agree on how tall a line became. One TextKit stack answers
+/// that: the same font, paragraph style, and container width the text view
+/// draws with, laid out here to measure. Line fragments are pinned to
+/// `DiffLayout.rowHeight`, so a wrapped line is always a whole number of rows.
+@MainActor
+private final class WrappedDiffLayout {
+    static let shared = WrappedDiffLayout()
+
+    private let storage = NSTextStorage()
+    private let layoutManager = NSLayoutManager()
+    private let container = NSTextContainer(
+        size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+    )
+    private var cachedLines: [ContinuousDiffTextLine] = []
+    private var cachedWidth: CGFloat = 0
+    private var cachedHeights: [CGFloat] = []
+
+    private init() {
+        container.lineFragmentPadding = 0
+        container.widthTracksTextView = false
+        container.lineBreakMode = .byWordWrapping
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+    }
+
+    /// Height of every logical line once wrapped into `width` points of text.
+    func rowHeights(for lines: [ContinuousDiffTextLine], width: CGFloat) -> [CGFloat] {
+        guard !lines.isEmpty else { return [] }
+        guard width >= DiffLayout.characterWidth else {
+            return Array(repeating: DiffLayout.rowHeight, count: lines.count)
+        }
+        if width == cachedWidth, lines == cachedLines { return cachedHeights }
+
+        let content = NSMutableAttributedString()
+        var ranges: [NSRange] = []
+        ranges.reserveCapacity(lines.count)
+        for line in lines {
+            let start = content.length
+            content.append(
+                NSAttributedString(
+                    string: line.text + "\n",
+                    attributes: [
+                        .font: DiffLayout.font,
+                        .paragraphStyle: DiffLayout.paragraphStyle(
+                            addsSpacingAfter: line.addsSpacingAfter,
+                            wraps: true
+                        )
+                    ]
+                )
+            )
+            ranges.append(NSRange(location: start, length: content.length - start))
+        }
+
+        container.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        storage.setAttributedString(content)
+        layoutManager.ensureLayout(for: container)
+
+        let heights = ranges.map { range -> CGFloat in
+            let glyphs = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            let bounds = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+            return max(bounds.height.rounded(), DiffLayout.rowHeight)
+        }
+
+        cachedLines = lines
+        cachedWidth = width
+        cachedHeights = heights
+        return heights
+    }
 }
 
 private struct LargeDiffPlaceholder: View {
@@ -1506,9 +1747,12 @@ private struct DiffHunkMenu: View {
 }
 
 private struct DiffHunkView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let hunk: UnifiedDiffHunk
     let selectedLineIDs: Set<Int>
     let staged: Bool
+    var wraps = false
+    var containerWidth: CGFloat = 0
     let isLoading: Bool
     let selectRange: (Set<Int>) -> Void
     let apply: (Set<Int>) -> Void
@@ -1516,6 +1760,30 @@ private struct DiffHunkView: View {
 
     @State private var isHovering = false
     @State private var dragStartIndex: Int?
+
+    private var textLines: [ContinuousDiffTextLine] {
+        hunk.lines.map {
+            ContinuousDiffTextLine(
+                text: $0.displayText.isEmpty ? " " : $0.displayText,
+                kind: $0.kind,
+                addsSpacingAfter: false
+            )
+        }
+    }
+
+    private var textWidth: CGFloat {
+        DiffLayout.wrappedTextWidth(in: containerWidth)
+    }
+
+    private var metrics: DiffRowMetrics {
+        guard wraps else { return DiffRowMetrics(rowCount: hunk.lines.count) }
+        return DiffRowMetrics(
+            heights: WrappedDiffLayout.shared.rowHeights(
+                for: textLines,
+                width: textWidth
+            )
+        )
+    }
 
     private var selectedChangeLineIDs: Set<Int> {
         selectedLineIDs.intersection(hunk.selectableLineIDs)
@@ -1536,7 +1804,7 @@ private struct DiffHunkView: View {
     }
 
     private var actionOffset: CGFloat {
-        CGFloat(selectedRowRange?.lowerBound ?? 0) * DiffLayout.rowHeight
+        metrics.offset(of: selectedRowRange?.lowerBound ?? 0)
     }
 
     private var shouldShowActions: Bool {
@@ -1556,6 +1824,7 @@ private struct DiffHunkView: View {
                 Text(hunk.header.text)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                     .padding(.horizontal, 9)
                     .frame(height: DiffLayout.rowHeight, alignment: .leading)
             }
@@ -1563,12 +1832,16 @@ private struct DiffHunkView: View {
             .background(Color.primary.opacity(0.035))
 
             ZStack(alignment: .topTrailing) {
+                let metrics = self.metrics
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(hunk.lines) { line in
+                    ForEach(hunk.lines.indices, id: \.self) { index in
+                        let line = hunk.lines[index]
                         DiffLineView(
                             line: line,
                             isRangeSelected: selectedLineIDs.contains(line.id),
-                            allowsTextSelection: false
+                            allowsTextSelection: false,
+                            showsText: !wraps,
+                            height: metrics.height(at: index)
                         )
                     }
                 }
@@ -1576,13 +1849,31 @@ private struct DiffHunkView: View {
                 .contentShape(Rectangle())
                 .gesture(selectionGesture)
 
+                if wraps {
+                    // Drawing the wrapped text on one surface keeps it lined up
+                    // with the gutter rows, which are measured from the same
+                    // layout. It is decoration only: the drag below selects.
+                    ContinuousDiffTextView(
+                        lines: textLines,
+                        style: .unified,
+                        colorScheme: colorScheme,
+                        wraps: true,
+                        isSelectable: false
+                    )
+                    .frame(
+                        width: textWidth,
+                        height: metrics.totalHeight,
+                        alignment: .topLeading
+                    )
+                    .padding(.leading, DiffLayout.unifiedTextLeadingInset)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .allowsHitTesting(false)
+                }
+
                 if let selectedRowRange {
                     Rectangle()
                         .strokeBorder(GitForkTheme.blue, lineWidth: 1.5)
-                        .frame(
-                            height: CGFloat(selectedRowRange.count)
-                                * DiffLayout.rowHeight
-                        )
+                        .frame(height: metrics.height(of: selectedRowRange))
                         .offset(y: actionOffset)
                         .allowsHitTesting(false)
                 }
@@ -1650,8 +1941,7 @@ private struct DiffHunkView: View {
     }
 
     private func rowIndex(at yPosition: CGFloat) -> Int {
-        let rawIndex = Int(floor(yPosition / DiffLayout.rowHeight))
-        return min(max(rawIndex, 0), hunk.lines.count - 1)
+        metrics.index(at: yPosition)
     }
 }
 
@@ -1945,17 +2235,29 @@ private struct ContinuousDiffTextView: NSViewRepresentable {
     let lines: [ContinuousDiffTextLine]
     let style: ContinuousDiffTextStyle
     let colorScheme: ColorScheme
+    /// Wrapped text folds a long line into more visual rows; unwrapped text is
+    /// clipped and the enclosing scroll view carries it sideways.
+    var wraps = false
+    var isSelectable = true
 
     func makeNSView(context: Context) -> NSTextView {
-        let textView = NSTextView(frame: .zero)
+        // An explicit TextKit 1 stack, because `WrappedDiffLayout` measures the
+        // gutter with the same one and the two layouts have to match.
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(
+            size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        )
+        container.lineFragmentPadding = 0
+        container.widthTracksTextView = true
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+
+        let textView = DiffTextSurface(frame: .zero, textContainer: container)
         textView.isEditable = false
-        textView.isSelectable = true
         textView.isRichText = true
         textView.drawsBackground = false
         textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.lineBreakMode = .byClipping
-        textView.textContainer?.widthTracksTextView = true
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = false
         textView.allowsUndo = false
@@ -1969,6 +2271,10 @@ private struct ContinuousDiffTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ textView: NSTextView, context: Context) {
+        textView.isSelectable = isSelectable
+        textView.usesFindPanel = isSelectable
+        textView.textContainer?.lineBreakMode = wraps ? .byWordWrapping : .byClipping
+
         let content = attributedContent
         guard !textView.attributedString().isEqual(to: content) else { return }
 
@@ -1981,23 +2287,18 @@ private struct ContinuousDiffTextView: NSViewRepresentable {
 
     private var attributedContent: NSAttributedString {
         let content = NSMutableAttributedString()
-        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         for line in lines {
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.minimumLineHeight = DiffLayout.rowHeight
-            paragraph.maximumLineHeight = DiffLayout.rowHeight
-            paragraph.paragraphSpacing = line.addsSpacingAfter ? 10 : 0
-            paragraph.defaultTabInterval = DiffLayout.characterWidth * 4
-            paragraph.lineBreakMode = .byClipping
-
             content.append(
                 NSAttributedString(
                     string: line.text + "\n",
                     attributes: [
-                        .font: font,
+                        .font: DiffLayout.font,
                         .foregroundColor: foregroundColor(for: line),
-                        .paragraphStyle: paragraph
+                        .paragraphStyle: DiffLayout.paragraphStyle(
+                            addsSpacingAfter: line.addsSpacingAfter,
+                            wraps: wraps
+                        )
                     ]
                 )
             )
@@ -2027,12 +2328,22 @@ private struct ContinuousDiffTextView: NSViewRepresentable {
     }
 }
 
+/// Diff text that steps out of the way when it is only decoration, so a hunk's
+/// line-selection drag still reaches SwiftUI underneath it.
+private final class DiffTextSurface: NSTextView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isSelectable ? super.hitTest(point) : nil
+    }
+}
+
 private struct DiffLineView: View {
     @Environment(\.colorScheme) private var colorScheme
     let line: UnifiedDiffLine
     let isRangeSelected: Bool
     let allowsTextSelection: Bool
     var showsText = true
+    /// A wrapped line covers more than one visual row.
+    var height = DiffLayout.rowHeight
 
     private var foreground: Color {
         if line.kind == .addition { return GitForkTheme.diffAddition(colorScheme) }
@@ -2083,11 +2394,11 @@ private struct DiffLineView: View {
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(foreground)
                     .padding(.horizontal, DiffLayout.textPadding)
-                    .frame(height: DiffLayout.rowHeight, alignment: .leading)
+                    .frame(height: height, alignment: .topLeading)
             } else {
                 Color.clear
                     .padding(.horizontal, DiffLayout.textPadding)
-                    .frame(height: DiffLayout.rowHeight)
+                    .frame(height: height)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2099,10 +2410,12 @@ private struct DiffLineView: View {
             .font(.system(size: 10, design: .monospaced))
             .foregroundStyle(.tertiary)
             .padding(.trailing, 5)
+            // A wrapped line keeps its number on the first visual row.
             .frame(
                 width: DiffLayout.lineNumberWidth,
                 height: DiffLayout.rowHeight,
                 alignment: .trailing
             )
+            .frame(height: height, alignment: .top)
     }
 }

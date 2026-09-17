@@ -157,3 +157,23 @@ struct ExternalURLClaimsTests {
         #expect(later)
     }
 }
+
+struct ExternalURLWindowCleanupTests {
+    @Test
+    func startsPendingCleanupDuringAnEmptyColdLaunch() {
+        #expect(
+            ExternalURLWindowCleanup.shouldStartPendingCleanup(
+                paths: [nil]
+            )
+        )
+    }
+
+    @Test
+    func preservesWindowsOnceARepositoryIsOpen() {
+        #expect(
+            !ExternalURLWindowCleanup.shouldStartPendingCleanup(
+                paths: [nil, "/tmp/repos/project"]
+            )
+        )
+    }
+}

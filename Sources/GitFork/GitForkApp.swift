@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct GitForkApp: App {
+    static let welcomeWindowID = "welcome"
     static let repositoryWindowID = "repository"
     static let sideBySideDiffWindowID = "side-by-side-diff"
 
@@ -15,6 +16,15 @@ struct GitForkApp: App {
     }
 
     var body: some Scene {
+        Window("GitFork", id: Self.welcomeWindowID) {
+            WelcomeRepositoryWindow()
+        }
+        .defaultSize(width: 1380, height: 840)
+        .windowToolbarStyle(.unified(showsTitle: false))
+        .commands {
+            GitForkCommands()
+        }
+
         WindowGroup(
             id: Self.repositoryWindowID,
             for: RepositoryWindowValue.self
@@ -26,6 +36,7 @@ struct GitForkApp: App {
         .commands {
             GitForkCommands()
         }
+        .handlesExternalEvents(matching: ["*"])
 
         WindowGroup(
             id: Self.sideBySideDiffWindowID,
@@ -50,6 +61,17 @@ struct GitForkApp: App {
     }
 }
 
+/// The single window shown for an ordinary app launch. Keeping it separate
+/// from the value-driven repository group prevents a URL launch from also
+/// creating an empty recent-repositories window.
+private struct WelcomeRepositoryWindow: View {
+    @State private var repository: RepositoryWindowValue?
+
+    var body: some View {
+        RepositoryWindow(repository: $repository)
+    }
+}
+
 /// One window's repository. Every window owns its own `RepositoryStore`, so
 /// windows show different repositories at the same time, and exposes it as the
 /// focused scene object so menu commands act on the frontmost window.
@@ -60,7 +82,7 @@ struct RepositoryWindow: View {
     @State private var hostingWindow: NSWindow?
 
     var body: some View {
-        RootView()
+        RootView(onOpenExternalURL: handleExternalURL)
             .environmentObject(store)
             .focusedSceneObject(store)
             .frame(minWidth: 980, minHeight: 640)
@@ -124,6 +146,24 @@ struct RepositoryWindow: View {
             window: hostingWindow,
             repository: store.repositoryURL
         )
+    }
+
+    private func handleExternalURL(_ url: URL) {
+        guard RepositoryWindowRegistry.shared.claimExternalURL(url) else { return }
+
+        if let hostingWindow {
+            RepositoryWindowRegistry.shared.closeDuplicateEmptyWindows(
+                excluding: hostingWindow
+            )
+        } else {
+            DispatchQueue.main.async {
+                guard let hostingWindow else { return }
+                RepositoryWindowRegistry.shared.closeDuplicateEmptyWindows(
+                    excluding: hostingWindow
+                )
+            }
+        }
+        store.openExternalURL(url)
     }
 
     /// Sends a resolved repository to the window that should show it: the one
@@ -268,6 +308,7 @@ struct GitForkCommands: Commands {
 
 struct RootView: View {
     @EnvironmentObject private var store: RepositoryStore
+    let onOpenExternalURL: (URL) -> Void
 
     var body: some View {
         Group {
@@ -278,10 +319,7 @@ struct RootView: View {
             }
         }
         .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
-        .onOpenURL { url in
-            guard RepositoryWindowRegistry.shared.claimExternalURL(url) else { return }
-            store.openExternalURL(url)
-        }
+        .onOpenURL(perform: onOpenExternalURL)
         .sheet(isPresented: $store.isShowingCLIInstaller) {
             CLIInstallerView()
         }

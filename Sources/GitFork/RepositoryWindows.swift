@@ -76,11 +76,13 @@ final class RepositoryWindowRegistry {
 
     private struct Entry {
         weak var window: NSWindow?
-        var path: String
+        var path: String?
     }
 
     private var entries: [Entry] = []
     private var claims = ExternalURLClaims()
+    private weak var pendingExternalURLWindow: NSWindow?
+    private var pendingExternalURLCleanupDeadline: Date?
     private var pendingWindowSize: CGSize?
     private var closeObserver: NSObjectProtocol?
 
@@ -97,12 +99,15 @@ final class RepositoryWindowRegistry {
         }
     }
 
-    /// Records the repository `window` shows, or clears its entry when the
-    /// window has no repository yet.
+    /// Records the repository `window` shows, including empty windows so a
+    /// duplicate created during a custom-URL launch can be identified.
     func update(window: NSWindow?, repository: URL?) {
         entries.removeAll { $0.window == nil || $0.window === window }
-        guard let window, let repository else { return }
-        entries.append(Entry(window: window, path: repository.standardizedFileURL.path))
+        guard let window else { return }
+        entries.append(
+            Entry(window: window, path: repository?.standardizedFileURL.path)
+        )
+        finishPendingExternalURLCleanupIfNeeded()
     }
 
     func isOpen(_ repository: RepositoryWindowValue, excluding window: NSWindow?) -> Bool {
@@ -121,6 +126,23 @@ final class RepositoryWindowRegistry {
 
     func claimExternalURL(_ url: URL) -> Bool {
         claims.claim(url)
+    }
+
+    /// Newer macOS releases can create both the URL-targeted repository window
+    /// and the app's default welcome window during a cold launch. Close only
+    /// redundant empty windows; once any repository is open, preserve every
+    /// user-created window.
+    func closeDuplicateEmptyWindows(excluding window: NSWindow) {
+        entries.removeAll { $0.window == nil }
+        guard ExternalURLWindowCleanup.shouldStartPendingCleanup(
+            paths: entries.map(\.path)
+        ) else {
+            return
+        }
+
+        pendingExternalURLWindow = window
+        pendingExternalURLCleanupDeadline = .now.addingTimeInterval(2)
+        finishPendingExternalURLCleanupIfNeeded()
     }
 
     /// Hands the size of the window a new window is opened from to that window,
@@ -157,6 +179,34 @@ final class RepositoryWindowRegistry {
 
     private func forget(_ window: NSWindow?) {
         entries.removeAll { $0.window == nil || $0.window === window }
+    }
+
+    private func finishPendingExternalURLCleanupIfNeeded(at now: Date = .now) {
+        guard let pendingExternalURLWindow,
+              let deadline = pendingExternalURLCleanupDeadline,
+              now <= deadline else {
+            self.pendingExternalURLWindow = nil
+            pendingExternalURLCleanupDeadline = nil
+            return
+        }
+
+        let duplicates = entries.compactMap { entry -> NSWindow? in
+            guard entry.path == nil, entry.window !== pendingExternalURLWindow else {
+                return nil
+            }
+            return entry.window
+        }
+        guard !duplicates.isEmpty else { return }
+
+        self.pendingExternalURLWindow = nil
+        pendingExternalURLCleanupDeadline = nil
+        duplicates.forEach { $0.close() }
+    }
+}
+
+enum ExternalURLWindowCleanup {
+    static func shouldStartPendingCleanup(paths: [String?]) -> Bool {
+        !paths.contains { $0 != nil }
     }
 }
 

@@ -100,6 +100,7 @@ struct SidebarView: View {
                 }
             } header: {
                 SidebarSectionHeader(title: "Branches", isExpanded: $branchesExpanded)
+                    .modifier(BranchDropTarget(prefix: ""))
             }
 
             Section(isExpanded: $remotesExpanded) {
@@ -150,6 +151,52 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom) {
             RepositoryIdentityView()
         }
+        .confirmationDialog(
+            branchMoveTitle,
+            isPresented: branchMoveBinding,
+            titleVisibility: .visible,
+            presenting: store.pendingBranchMove
+        ) { _ in
+            Button("Move Branch") {
+                store.confirmBranchMove()
+            }
+            .disabled(store.isLoading)
+            Button("Cancel", role: .cancel) {
+                store.cancelBranchMove()
+            }
+        } message: { move in
+            Text(branchMoveMessage(for: move))
+        }
+    }
+
+    private var branchMoveBinding: Binding<Bool> {
+        Binding(
+            get: { store.pendingBranchMove != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.cancelBranchMove()
+                }
+            }
+        )
+    }
+
+    private var branchMoveTitle: String {
+        guard let move = store.pendingBranchMove else { return "Move Branch?" }
+        let destination = move.destinationPrefix.isEmpty
+            ? "the top level"
+            : "\(move.destinationPrefix)/"
+        return "Move “\(move.reference.name)” to \(destination)?"
+    }
+
+    private func branchMoveMessage(for move: GitBranchMove) -> String {
+        var message = "This renames the local branch to “\(move.newName)” and keeps its commits."
+        if let upstream = move.reference.upstream {
+            message += " " + """
+            It keeps tracking \(upstream.shortName); the branch on \(upstream.remote) \
+            is not renamed.
+            """
+        }
+        return message
     }
 }
 
@@ -517,7 +564,44 @@ private struct ReferenceFolderRow: View {
         }
         .buttonStyle(GitForkHoverButtonStyle(.compactRow(isSelected: false)))
         .help(isExpanded ? "Collapse \(node.path)" : "Expand \(node.path)")
+        .modifier(BranchDropTarget(prefix: node.kind == .localBranch ? node.path : nil))
         .listRowBackground(Color.clear)
+    }
+}
+
+/// Accepts a dragged local branch and asks to move it under `prefix`, which
+/// can be several levels deep. An empty prefix means the top level; `nil`
+/// leaves the row inert, as it is for remote and tag folders.
+private struct BranchDropTarget: ViewModifier {
+    @EnvironmentObject private var store: RepositoryStore
+    @State private var isTargeted = false
+
+    let prefix: String?
+
+    func body(content: Content) -> some View {
+        if let prefix {
+            content
+                .dropDestination(for: String.self) { names, _ in
+                    guard let name = names.first else { return false }
+                    return store.requestBranchMove(named: name, toPrefix: prefix)
+                } isTargeted: {
+                    isTargeted = $0
+                }
+                .background {
+                    if isTargeted {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(GitForkTheme.accent.opacity(0.16))
+                    }
+                }
+                .overlay {
+                    if isTargeted {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(GitForkTheme.accent.opacity(0.6), lineWidth: 1)
+                    }
+                }
+        } else {
+            content
+        }
     }
 }
 
@@ -525,6 +609,7 @@ private struct ReferenceSidebarRow: View {
     @EnvironmentObject private var store: RepositoryStore
     @State private var isConfirmingDelete = false
     @State private var isRenaming = false
+    @State private var isChoosingPrefix = false
 
     let reference: GitReference
     let title: String
@@ -537,7 +622,8 @@ private struct ReferenceSidebarRow: View {
             icon: icon,
             isSelected: store.selectedReference == reference,
             isProminent: reference.isCurrent,
-            indent: indent
+            indent: indent,
+            dragPayload: reference.kind == .localBranch ? reference.name : nil
         ) {
             store.selectReference(reference)
         } badge: {
@@ -577,6 +663,27 @@ private struct ReferenceSidebarRow: View {
                     isRenaming = true
                 } label: {
                     Label("Rename Branch…", systemImage: "pencil")
+                }
+                .disabled(store.isLoading)
+
+                Menu {
+                    ForEach(prefixMoves, id: \.newName) { move in
+                        Button(move.destinationPrefix.isEmpty ? "Top Level" : move.destinationPrefix) {
+                            store.requestBranchMove(
+                                named: reference.name,
+                                toPrefix: move.destinationPrefix
+                            )
+                        }
+                        .disabled(move.conflictingBranch(in: store.references) != nil)
+                    }
+                    if !prefixMoves.isEmpty {
+                        Divider()
+                    }
+                    Button("New Prefix…") {
+                        isChoosingPrefix = true
+                    }
+                } label: {
+                    Label("Move to Prefix", systemImage: "folder")
                 }
                 .disabled(store.isLoading)
             }
@@ -634,6 +741,17 @@ private struct ReferenceSidebarRow: View {
         }
         .sheet(isPresented: $isRenaming) {
             RenameBranchSheet(reference: reference, isPresented: $isRenaming)
+        }
+        .sheet(isPresented: $isChoosingPrefix) {
+            MoveBranchToPrefixSheet(reference: reference, isPresented: $isChoosingPrefix)
+        }
+    }
+
+    /// The top level, when the branch has a prefix, followed by every other
+    /// prefix already in use. The branch's own prefix is left out.
+    private var prefixMoves: [GitBranchMove] {
+        ([""] + GitBranchMove.prefixes(in: store.references)).compactMap {
+            GitBranchMove(reference: reference, toPrefix: $0)
         }
     }
 
@@ -757,6 +875,9 @@ private struct SidebarRow<Badge: View>: View {
     let isProminent: Bool
     let size: SidebarRowSize
     let indent: CGFloat
+    /// Makes the row draggable, carrying this string, such as a local branch
+    /// name dropped on a `BranchDropTarget`.
+    let dragPayload: String?
     let action: () -> Void
     @ViewBuilder let badge: () -> Badge
 
@@ -768,6 +889,7 @@ private struct SidebarRow<Badge: View>: View {
         isProminent: Bool = false,
         size: SidebarRowSize = .compact,
         indent: CGFloat = 0,
+        dragPayload: String? = nil,
         action: @escaping () -> Void,
         @ViewBuilder badge: @escaping () -> Badge
     ) {
@@ -778,61 +900,89 @@ private struct SidebarRow<Badge: View>: View {
         self.isProminent = isProminent
         self.size = size
         self.indent = indent
+        self.dragPayload = dragPayload
         self.action = action
         self.badge = badge
     }
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: size == .regular ? 9 : 7) {
-                Image(systemName: icon)
-                    .frame(width: size == .regular ? 20 : 16)
-                    .foregroundStyle(
-                        isProminent
-                            ? GitForkTheme.green
-                            : isSelected ? GitForkTheme.accent : .secondary
-                    )
-                Text(title)
-                    .lineLimit(1)
-                Spacer()
-                badge()
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.secondary)
+        clickableRow
+            .disabled(!isEnabled)
+            .background {
+                if isProminent && !isSelected {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(GitForkTheme.green.opacity(0.10))
+                }
             }
-            .font(size == .regular ? .title3 : .body)
-            .padding(.leading, indent)
-            .contentShape(Rectangle())
-        }
-        .disabled(!isEnabled)
-        .buttonStyle(
-            GitForkHoverButtonStyle(
-                size == .regular
-                    ? .row(isSelected: isSelected)
-                    : .compactRow(isSelected: isSelected)
-            )
-        )
-        .background {
-            if isProminent && !isSelected {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(GitForkTheme.green.opacity(0.10))
+            .overlay {
+                if isProminent && !isSelected {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(GitForkTheme.green.opacity(0.32), lineWidth: 1)
+                }
             }
-        }
-        .overlay {
-            if isProminent && !isSelected {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(GitForkTheme.green.opacity(0.32), lineWidth: 1)
+            .overlay(alignment: .leading) {
+                if isProminent {
+                    Capsule()
+                        .fill(GitForkTheme.green)
+                        .frame(width: 3)
+                        .padding(.vertical, 4)
+                }
             }
-        }
-        .overlay(alignment: .leading) {
-            if isProminent {
-                Capsule()
-                    .fill(GitForkTheme.green)
-                    .frame(width: 3)
-                    .padding(.vertical, 4)
+            .help("Show \(title)")
+            .listRowBackground(Color.clear)
+    }
+
+    /// A `Button` tracks the mouse from press to release and never lets a drag
+    /// begin, so a draggable row handles its click with a tap gesture instead.
+    /// The tap only fires when the pointer does not move, which leaves any
+    /// movement free to start the drag.
+    @ViewBuilder
+    private var clickableRow: some View {
+        if let dragPayload {
+            GitForkHoverButtonBody(label: label, isPressed: false, variant: variant)
+                .onTapGesture(perform: action)
+                .draggable(dragPayload) {
+                    Label(dragPayload, systemImage: icon)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { action() }
+        } else {
+            Button(action: action) {
+                label
             }
+            .buttonStyle(GitForkHoverButtonStyle(variant))
         }
-        .help("Show \(title)")
-        .listRowBackground(Color.clear)
+    }
+
+    private var variant: GitForkHoverButtonVariant {
+        size == .regular
+            ? .row(isSelected: isSelected)
+            : .compactRow(isSelected: isSelected)
+    }
+
+    private var label: some View {
+        HStack(spacing: size == .regular ? 9 : 7) {
+            Image(systemName: icon)
+                .frame(width: size == .regular ? 20 : 16)
+                .foregroundStyle(
+                    isProminent
+                        ? GitForkTheme.green
+                        : isSelected ? GitForkTheme.accent : .secondary
+                )
+            Text(title)
+                .lineLimit(1)
+            Spacer()
+            badge()
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .font(size == .regular ? .title3 : .body)
+        .padding(.leading, indent)
+        .contentShape(Rectangle())
     }
 }
 

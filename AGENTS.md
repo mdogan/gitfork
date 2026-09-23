@@ -128,6 +128,13 @@ swift test --disable-sandbox
   application menu. Keep its `gitfork://open?path=...` contract synchronized
   with `GitForkExternalURL`.
 - Use confirmation UI before adding destructive working-tree operations.
+- Dragging a local branch onto a sidebar branch folder at any depth moves it
+  under that prefix, and dropping it on the Branches header moves it to the top
+  level. The branch row's "Move to Prefix" menu offers the same moves: the top
+  level, every existing prefix sorted by name, and a new prefix. The branch
+  keeps its last path component, and the rename always waits for confirmation.
+- Sidebar rows that can be dragged handle clicks with a tap gesture instead of
+  a `Button`, because a `Button` keeps the mouse and a drag never starts.
 
 ## Git Behavior
 

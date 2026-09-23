@@ -41,6 +41,7 @@ final class RepositoryStore: ObservableObject {
     @Published private(set) var branchPendingForceDelete: GitReference?
     @Published private(set) var worktreePendingForceDelete: GitWorktree?
     @Published private(set) var pendingPushPlan: GitPushPlan?
+    @Published private(set) var pendingBranchMove: GitBranchMove?
     @Published var isConfirmingPush = false
     @Published var isShowingCLIInstaller = false
     @Published var isShowingRepositorySwitcher = false
@@ -890,6 +891,38 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    /// Asks for confirmation before moving the local branch `name` under
+    /// `prefix`. Returns `false` when the drop does nothing: the payload is not
+    /// a local branch, or the branch already sits under that prefix.
+    @discardableResult
+    func requestBranchMove(named name: String, toPrefix prefix: String) -> Bool {
+        guard !isLoading,
+              let reference = references.first(where: {
+                  $0.kind == .localBranch && $0.name == name
+              }),
+              let move = GitBranchMove(reference: reference, toPrefix: prefix) else {
+            return false
+        }
+        if let conflict = move.conflictingBranch(in: references) {
+            errorMessage = conflict.name == move.newName
+                ? "Cannot move \(reference.name): a branch named \(move.newName) already exists."
+                : "Cannot move \(reference.name): \(move.newName) is already a folder of branches, such as \(conflict.name)."
+            return false
+        }
+        pendingBranchMove = move
+        return true
+    }
+
+    func confirmBranchMove() {
+        guard let move = pendingBranchMove else { return }
+        pendingBranchMove = nil
+        rename(move.reference, to: move.newName)
+    }
+
+    func cancelBranchMove() {
+        pendingBranchMove = nil
+    }
+
     /// Keeps a renamed branch selected under its new name. Git moves the ref
     /// itself, so the history scope has to follow it or the reload that comes
     /// next asks for a ref that no longer exists.
@@ -1470,6 +1503,7 @@ final class RepositoryStore: ObservableObject {
         worktreePendingForceDelete = nil
         pendingPushPlan = nil
         isConfirmingPush = false
+        pendingBranchMove = nil
         cachedCommitHash = nil
         cachedCommitDetails = nil
         cachedVerifiedCommit = nil

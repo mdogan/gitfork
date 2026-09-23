@@ -194,6 +194,62 @@ struct ReferenceTreeNode: Identifiable, Hashable, Sendable {
     }
 }
 
+/// A local branch moved under a different name prefix by dropping it on a
+/// sidebar folder. Prefixes can be any depth: `team/fix/login` dropped on
+/// `experimental/ui` becomes `experimental/ui/login`. The branch keeps its last
+/// path component and an empty prefix moves it to the top level.
+struct GitBranchMove: Hashable, Sendable {
+    let reference: GitReference
+    let destinationPrefix: String
+    let newName: String
+
+    /// Returns `nil` for anything but a local branch, and when the branch
+    /// already sits directly under `prefix`.
+    init?(reference: GitReference, toPrefix prefix: String) {
+        guard reference.kind == .localBranch else { return nil }
+        let leaf = reference.name.components(separatedBy: "/").last ?? reference.name
+        let newName = prefix.isEmpty ? leaf : "\(prefix)/\(leaf)"
+        guard newName != reference.name else { return nil }
+        self.reference = reference
+        self.destinationPrefix = prefix
+        self.newName = newName
+    }
+
+    /// Every prefix in use by a local branch, at every depth, sorted the way
+    /// the sidebar sorts folders: `team/fix/login` contributes both `team`
+    /// and `team/fix`.
+    static func prefixes(in references: [GitReference]) -> [String] {
+        var prefixes = Set<String>()
+        for reference in references where reference.kind == .localBranch {
+            let components = reference.name.components(separatedBy: "/").dropLast()
+            for depth in components.indices {
+                prefixes.insert(components[...depth].joined(separator: "/"))
+            }
+        }
+        return prefixes.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
+    /// Normalizes a typed prefix: surrounding whitespace and slashes are
+    /// dropped, so `" experimental/ui/ "` names the `experimental/ui` prefix.
+    static func normalizedPrefix(_ prefix: String) -> String {
+        prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    /// The local branch that already occupies the new name, either exactly or
+    /// as a folder of the same name, which Git's ref layout cannot hold
+    /// alongside a branch.
+    func conflictingBranch(in references: [GitReference]) -> GitReference? {
+        references.first {
+            $0.kind == .localBranch
+                && $0 != reference
+                && ($0.name == newName || $0.name.hasPrefix(newName + "/"))
+        }
+    }
+}
+
 struct GitStash: Identifiable, Hashable, Sendable {
     let selector: String
     let hash: String

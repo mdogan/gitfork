@@ -640,6 +640,107 @@ struct GitParserTests {
     }
 
     @Test
+    func movesBranchUnderMultiLevelPrefixKeepingItsLastComponent() throws {
+        func branch(_ name: String) -> GitReference {
+            GitReference(
+                name: name,
+                fullName: "refs/heads/\(name)",
+                kind: .localBranch,
+                target: "111111",
+                isCurrent: false
+            )
+        }
+        let login = branch("team/fix/login")
+
+        let nested = try #require(GitBranchMove(reference: login, toPrefix: "experimental/ui"))
+        #expect(nested.newName == "experimental/ui/login")
+        #expect(nested.destinationPrefix == "experimental/ui")
+
+        #expect(GitBranchMove(reference: branch("fix/login"), toPrefix: "experimental")?.newName
+            == "experimental/login")
+        #expect(GitBranchMove(reference: login, toPrefix: "team")?.newName == "team/login")
+        #expect(GitBranchMove(reference: login, toPrefix: "")?.newName == "login")
+        #expect(GitBranchMove(reference: branch("login"), toPrefix: "fix")?.newName == "fix/login")
+
+        #expect(GitBranchMove(reference: login, toPrefix: "team/fix") == nil)
+        #expect(GitBranchMove(reference: branch("login"), toPrefix: "") == nil)
+        let remote = GitReference(
+            name: "origin/fix/login",
+            fullName: "refs/remotes/origin/fix/login",
+            kind: .remoteBranch,
+            target: "111111",
+            isCurrent: false
+        )
+        #expect(GitBranchMove(reference: remote, toPrefix: "experimental") == nil)
+    }
+
+    @Test
+    func listsEveryLocalBranchPrefixAtEveryDepthSorted() {
+        func reference(_ name: String, kind: ReferenceKind = .localBranch) -> GitReference {
+            GitReference(
+                name: name,
+                fullName: "refs/heads/\(name)",
+                kind: kind,
+                target: "111111",
+                isCurrent: false
+            )
+        }
+        let references = [
+            reference("team/fix/login"),
+            reference("main"),
+            reference("experimental/ui"),
+            reference("team/fix/logout"),
+            reference("Feature/b2"),
+            reference("feature10/x"),
+            reference("feature2/x"),
+            reference("origin/remote-only/x", kind: .remoteBranch),
+            reference("release/v1", kind: .tag)
+        ]
+
+        #expect(
+            GitBranchMove.prefixes(in: references)
+                == ["experimental", "Feature", "feature2", "feature10", "team", "team/fix"]
+        )
+        #expect(GitBranchMove.prefixes(in: [reference("main")]).isEmpty)
+    }
+
+    @Test
+    func normalizesTypedBranchPrefixes() {
+        #expect(GitBranchMove.normalizedPrefix("  experimental/ui/ ") == "experimental/ui")
+        #expect(GitBranchMove.normalizedPrefix("/team/fix") == "team/fix")
+        #expect(GitBranchMove.normalizedPrefix(" / ").isEmpty)
+    }
+
+    @Test
+    func detectsBranchMoveConflictsWithBranchesAndFolders() throws {
+        func branch(_ name: String, kind: ReferenceKind = .localBranch) -> GitReference {
+            GitReference(
+                name: name,
+                fullName: "refs/heads/\(name)",
+                kind: kind,
+                target: "111111",
+                isCurrent: false
+            )
+        }
+        let login = branch("fix/login")
+        let move = try #require(GitBranchMove(reference: login, toPrefix: "experimental"))
+
+        #expect(move.conflictingBranch(in: [login, branch("experimental/other")]) == nil)
+        #expect(move.conflictingBranch(in: [login, branch("experimental/login-v2")]) == nil)
+        #expect(
+            move.conflictingBranch(in: [login, branch("experimental/login", kind: .tag)]) == nil
+        )
+        #expect(
+            move.conflictingBranch(in: [login, branch("experimental/login")])?.name
+                == "experimental/login"
+        )
+        #expect(
+            move.conflictingBranch(in: [login, branch("experimental/login/deep")])?.name
+                == "experimental/login/deep"
+        )
+    }
+
+    @Test
     func prefersMainThenMasterAsPrimaryLocalBranch() throws {
         let feature = GitReference(
             name: "feature/sidebar",

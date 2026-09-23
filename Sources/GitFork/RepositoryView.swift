@@ -514,6 +514,88 @@ struct RenameBranchSheet: View {
     }
 }
 
+/// Moves a branch under a prefix typed by the user, which can be new and
+/// several levels deep. The sheet shows the resulting name before the rename,
+/// so its Move button is the confirmation.
+struct MoveBranchToPrefixSheet: View {
+    @EnvironmentObject private var store: RepositoryStore
+    let reference: GitReference
+    @Binding var isPresented: Bool
+    @State private var prefix = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Image(systemName: "folder")
+                    .font(.title)
+                    .foregroundStyle(GitForkTheme.accent)
+                VStack(alignment: .leading) {
+                    Text("Move to New Prefix")
+                        .font(.title2.weight(.semibold))
+                    Text("“\(reference.name)” keeps its commits.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            TextField("Prefix, such as experimental/ui", text: $prefix)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { moveBranch() }
+
+            Text(statusMessage)
+                .font(.callout)
+                .foregroundStyle(conflict == nil ? Color.secondary : Color.red)
+                .textSelection(.enabled)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    isPresented = false
+                }
+                Button {
+                    moveBranch()
+                } label: {
+                    Label("Move", systemImage: "folder")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Rename the branch under the new prefix")
+                .disabled(!canMove)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
+    }
+
+    private var move: GitBranchMove? {
+        let cleanPrefix = GitBranchMove.normalizedPrefix(prefix)
+        guard !cleanPrefix.isEmpty else { return nil }
+        return GitBranchMove(reference: reference, toPrefix: cleanPrefix)
+    }
+
+    private var conflict: GitReference? {
+        move?.conflictingBranch(in: store.references)
+    }
+
+    private var statusMessage: String {
+        guard let move else { return "Enter a prefix to see the new branch name." }
+        if let conflict {
+            return conflict.name == move.newName
+                ? "A branch named \(move.newName) already exists."
+                : "\(move.newName) is already a folder of branches, such as \(conflict.name)."
+        }
+        return "New name: \(move.newName)"
+    }
+
+    private var canMove: Bool {
+        move != nil && conflict == nil && !store.isLoading
+    }
+
+    private func moveBranch() {
+        guard canMove, let move else { return }
+        store.rename(reference, to: move.newName)
+        isPresented = false
+    }
+}
+
 struct StashSheet: View {
     @EnvironmentObject private var store: RepositoryStore
     @Binding var isPresented: Bool

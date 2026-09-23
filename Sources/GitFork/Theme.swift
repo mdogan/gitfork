@@ -113,7 +113,9 @@ struct GitForkHoverButtonStyle: ButtonStyle {
     }
 }
 
-private struct GitForkHoverButtonBody<Label: View>: View {
+/// The hover and pressed appearance behind `GitForkHoverButtonStyle`, also used
+/// directly by rows that cannot be a `Button`, such as draggable sidebar rows.
+struct GitForkHoverButtonBody<Label: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isEnabled) private var isEnabled
     @State private var isHovering = false

@@ -42,15 +42,18 @@ struct GitForkApp: App {
             id: Self.sideBySideDiffWindowID,
             for: SideBySideDiffWindowState.self
         ) { state in
-            if let state = state.wrappedValue {
-                SideBySideDiffWindow(state: state)
-            } else {
-                ContentUnavailableView(
-                    "No Diff",
-                    systemImage: "rectangle.split.2x1",
-                    description: Text("Open a side-by-side diff from the Changes view.")
-                )
+            Group {
+                if let state = state.wrappedValue {
+                    SideBySideDiffWindow(state: state)
+                } else {
+                    ContentUnavailableView(
+                        "No Diff",
+                        systemImage: "rectangle.split.2x1",
+                        description: Text("Open a side-by-side diff from the Changes view.")
+                    )
+                }
             }
+            .lookWindowStyle()
         }
         .defaultSize(width: 1180, height: 760)
         .windowToolbarStyle(.unified)
@@ -86,7 +89,7 @@ struct RepositoryWindow: View {
             .environmentObject(store)
             .focusedSceneObject(store)
             .frame(minWidth: 980, minHeight: 640)
-            .tint(GitForkTheme.accent)
+            .lookWindowStyle()
             .toolbarBackground(repositoryToolbarBackground, for: .windowToolbar)
             .toolbarBackground(.visible, for: .windowToolbar)
             .background(
@@ -123,22 +126,18 @@ struct RepositoryWindow: View {
         return GitForkTheme.repositoryColor(for: name)
     }
 
-    /// Resolve the translucent repository tint over the window background so
+    /// Resolve the translucent repository tint over the theme background so
     /// split-view separators cannot show through the toolbar.
     private var repositoryToolbarBackground: Color {
-        let fraction = 0.22
-        let tint = NSColor(repositoryToolbarColor).usingColorSpace(.sRGB)
-        let base = NSColor.windowBackgroundColor.usingColorSpace(.sRGB)
-
-        guard let tint, let base else {
+        guard let tint = NSColor(repositoryToolbarColor).usingColorSpace(.sRGB) else {
             return repositoryToolbarColor
         }
-
-        return Color(
-            red: base.redComponent * (1 - fraction) + tint.redComponent * fraction,
-            green: base.greenComponent * (1 - fraction) + tint.greenComponent * fraction,
-            blue: base.blueComponent * (1 - fraction) + tint.blueComponent * fraction
+        let base = Look.shared.colors.background
+        let mixed = base.mixed(
+            with: RGB(tint.redComponent, tint.greenComponent, tint.blueComponent),
+            0.22
         )
+        return Color(mixed)
     }
 
     private func registerWindow() {
@@ -322,25 +321,31 @@ struct RootView: View {
         .onOpenURL(perform: onOpenExternalURL)
         .sheet(isPresented: $store.isShowingCLIInstaller) {
             CLIInstallerView()
+                .lookWindowStyle()
         }
         .sheet(isPresented: $store.isShowingRepositorySwitcher) {
             RepositorySwitcherSheet()
                 .environmentObject(store)
+                .lookWindowStyle()
         }
         .sheet(isPresented: $store.isShowingBranchPicker) {
             BranchPickerSheet()
                 .environmentObject(store)
+                .lookWindowStyle()
         }
         .sheet(isPresented: $store.isShowingPathHistoryPicker) {
             PathHistoryPickerSheet()
                 .environmentObject(store)
+                .lookWindowStyle()
         }
         .sheet(isPresented: $store.isShowingCommitHashPicker) {
             CommitHashPickerSheet()
                 .environmentObject(store)
+                .lookWindowStyle()
         }
         .sheet(isPresented: $store.isShowingKeyboardShortcuts) {
             KeyboardShortcutsView()
+                .lookWindowStyle()
         }
         .alert(
             "GitFork",

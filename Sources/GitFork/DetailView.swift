@@ -398,7 +398,7 @@ private struct CommitFileChooser: View {
 private struct HeaderBackground: View {
     var body: some View {
         ZStack {
-            Rectangle().fill(.bar)
+            Rectangle().fill(Look.shared.sidebar)
             LinearGradient(
                 colors: [GitForkTheme.accent.opacity(0.07), .clear],
                 startPoint: .top,
@@ -643,7 +643,7 @@ private struct ConflictDocumentView: View {
                     alignment: .topLeading
                 )
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Look.shared.background)
         }
     }
 }
@@ -669,7 +669,7 @@ private struct ConflictBlockView: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 34)
-            .background(Color.primary.opacity(0.045))
+            .background(Look.shared.text.opacity(0.045))
 
             Divider()
 
@@ -713,11 +713,11 @@ private struct ConflictBlockView: View {
                     }
                 }
                 .padding(10)
-                .background(Color.primary.opacity(0.025))
+                .background(Look.shared.text.opacity(0.025))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background)
+        .background(Look.shared.background)
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay {
             RoundedRectangle(cornerRadius: 9)
@@ -974,7 +974,7 @@ private struct DiffTextView: View {
                                 // Top" a target in every diff layout.
                                 .id(DiffScrollAnchor.top)
                         }
-                        .background(Color(nsColor: .textBackgroundColor))
+                        .background(Look.shared.background)
                         // Rebuilding the scroll view for each focus change is
                         // what puts a newly chosen file at the top of the pane.
                         .id(focusedFileID)
@@ -1258,7 +1258,7 @@ struct SideBySideDiffWindow: View {
                         height: viewport.size.height,
                         alignment: .topLeading
                     )
-                    .background(Color(nsColor: .textBackgroundColor))
+                    .background(Look.shared.background)
                 }
             }
         }
@@ -1354,7 +1354,7 @@ private struct CommitDiffFileView: View {
             .font(.caption.monospaced())
             .padding(.horizontal, 10)
             .frame(height: 34)
-            .background(Color.primary.opacity(0.045))
+            .background(Look.shared.text.opacity(0.045))
 
             Divider()
 
@@ -1365,11 +1365,11 @@ private struct CommitDiffFileView: View {
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Look.shared.background)
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .overlay {
             RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(Color.primary.opacity(0.14))
+                .strokeBorder(Look.shared.text.opacity(0.14))
         }
     }
 }
@@ -1829,7 +1829,7 @@ private struct DiffHunkView: View {
                     .frame(height: DiffLayout.rowHeight, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.035))
+            .background(Look.shared.text.opacity(0.035))
 
             ZStack(alignment: .topTrailing) {
                 let metrics = self.metrics
@@ -2048,7 +2048,7 @@ private struct SideBySideDiffPane: View {
                     maxHeight: DiffLayout.sideBySideHeaderHeight,
                     alignment: .leading
                 )
-                .background(.bar)
+                .background(Look.shared.sidebar)
 
             Divider()
 
@@ -2146,7 +2146,7 @@ private struct SideBySideHunkColumnView: View {
                 height: DiffLayout.rowHeight,
                 alignment: .leading
             )
-            .background(Color.primary.opacity(0.035))
+            .background(Look.shared.text.opacity(0.035))
 
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(hunk.rows) { row in
@@ -2176,7 +2176,7 @@ private struct SideBySideCell: View {
 
     private var background: Color {
         // A missing counterpart is filled so the eye can follow the gap.
-        guard let line else { return Color.primary.opacity(0.04) }
+        guard let line else { return Look.shared.text.opacity(0.04) }
         switch line.kind {
         case .addition: return GitForkTheme.green.opacity(0.11)
         case .deletion: return GitForkTheme.red.opacity(0.10)
@@ -2314,18 +2314,23 @@ private struct ContinuousDiffTextView: NSViewRepresentable {
         case .deletion:
             NSColor(GitForkTheme.diffDeletion(colorScheme))
         case .hunkHeader:
-            style == .unified ? NSColor(GitForkTheme.blue) : .secondaryLabelColor
+            style == .unified ? NSColor(GitForkTheme.blue) : secondaryTextColor
         default:
             if style == .unified,
                line.text.hasPrefix("diff ") || line.text.hasPrefix("commit ") {
                 NSColor(GitForkTheme.purple)
             } else if style == .sideBySide, line.kind == .noNewline {
-                .secondaryLabelColor
+                secondaryTextColor
             } else {
-                .labelColor
+                NSColor(Look.shared.colors.foreground)
             }
         }
     }
+}
+
+@MainActor
+private var secondaryTextColor: NSColor {
+    NSColor(Look.shared.colors.foreground).withAlphaComponent(0.58)
 }
 
 /// Diff text that steps out of the way when it is only decoration, so a hunk's
@@ -2350,7 +2355,7 @@ private struct DiffLineView: View {
         if line.kind == .deletion { return GitForkTheme.diffDeletion(colorScheme) }
         if line.kind == .hunkHeader { return GitForkTheme.blue }
         if line.text.hasPrefix("diff ") || line.text.hasPrefix("commit ") { return GitForkTheme.purple }
-        return .primary
+        return Look.shared.text
     }
 
     private var background: Color {

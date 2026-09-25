@@ -89,6 +89,7 @@ struct ChangesView: View {
         }
         .sheet(isPresented: $showingCommitSheet) {
             CommitSheet(isPresented: $showingCommitSheet)
+                .lookWindowStyle()
         }
     }
 
@@ -206,6 +207,7 @@ private struct ChangeList: View {
                 }
             }
             .listStyle(.inset)
+            .lookListBackground(Look.shared.background)
             .environment(\.defaultMinListRowHeight, 30)
             .focused($isListFocused)
             .onKeyPress(characters: ChangeSelectionKey.returnCharacters) { _ in
@@ -595,7 +597,7 @@ private struct ChangeRow: View {
             )
         }
         .listRowInsets(EdgeInsets(top: 1, leading: 7, bottom: 1, trailing: 7))
-        .listRowBackground(Color.clear)
+        .listRowBackground(SystemSelectionHighlightRemover())
     }
 
     /// Standard macOS list behavior: Shift extends from the anchor, Command
@@ -801,7 +803,7 @@ private struct CommitSheet: View {
                 .focused($isMessageFocused)
                 .frame(minHeight: 170)
                 .padding(7)
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                .background(Look.shared.sidebar, in: RoundedRectangle(cornerRadius: 7))
                 .overlay(
                     RoundedRectangle(cornerRadius: 7)
                         .strokeBorder(.separator.opacity(0.7))

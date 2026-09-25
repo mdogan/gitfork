@@ -210,7 +210,6 @@ struct RepositorySwitcherSheet: View {
                 }
 
                 TextField("Search repositories", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
                     .focused($isSearchFocused)
                     .onSubmit {
                         if let repository = selectedRepository {
@@ -229,6 +228,7 @@ struct RepositorySwitcherSheet: View {
                         }
                         return .handled
                     }
+                    .lookField(isFocused: isSearchFocused, systemImage: "magnifyingglass")
             }
             .padding(20)
 

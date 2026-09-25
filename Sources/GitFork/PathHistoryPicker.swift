@@ -119,7 +119,6 @@ struct PathHistoryPickerSheet: View {
                 }
 
                 TextField("Search or enter a path", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
                     .focused($isSearchFocused)
                     .onSubmit {
                         showSelectedHistory()
@@ -136,6 +135,7 @@ struct PathHistoryPickerSheet: View {
                         }
                         return .handled
                     }
+                    .lookField(isFocused: isSearchFocused, systemImage: "magnifyingglass")
             }
             .padding(20)
 

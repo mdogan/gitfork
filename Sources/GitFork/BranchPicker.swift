@@ -82,7 +82,6 @@ struct BranchPickerSheet: View {
                 }
 
                 TextField("Search branches", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
                     .focused($isSearchFocused)
                     .onSubmit {
                         showSelectedBranch()
@@ -99,6 +98,7 @@ struct BranchPickerSheet: View {
                         }
                         return .handled
                     }
+                    .lookField(isFocused: isSearchFocused, systemImage: "magnifyingglass")
             }
             .padding(20)
 

@@ -1,19 +1,8 @@
 import Testing
 @testable import GitFork
 
+@MainActor
 struct RepositoryColorTests {
-    @Test
-    func keepsRedisServerBlue() {
-        #expect(
-            GitForkTheme.repositoryColor(for: "redis-server")
-                == GitForkTheme.blue
-        )
-        #expect(
-            GitForkTheme.repositoryColor(for: "REDIS-SERVER")
-                == GitForkTheme.blue
-        )
-    }
-
     @Test
     func derivesStableColorsFromRepositoryNames() {
         #expect(
@@ -22,7 +11,7 @@ struct RepositoryColorTests {
         )
         #expect(
             GitForkTheme.repositoryColor(for: "GitFork")
-                != GitForkTheme.repositoryColor(for: "redis-server")
+                == GitForkTheme.identityColor(for: "GitFork")
         )
     }
 }

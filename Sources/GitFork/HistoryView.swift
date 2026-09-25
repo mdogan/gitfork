@@ -51,6 +51,9 @@ struct HistoryView: View {
                                 EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 10)
                             )
                             .listRowSeparator(.hidden)
+                            .listRowBackground(
+                                LookListRowBackground(isSelected: commit.id == store.selectedCommit?.id)
+                            )
                         }
 
                         if store.canLoadMoreHistory || store.isLoadingMoreHistory {
@@ -71,6 +74,7 @@ struct HistoryView: View {
                         }
                     }
                     .listStyle(.inset)
+                    .lookListBackground(Look.shared.background)
                     .onChange(of: store.commitReveal) { _, reveal in
                         guard let reveal else { return }
                         withAnimation(.easeOut(duration: 0.12)) {

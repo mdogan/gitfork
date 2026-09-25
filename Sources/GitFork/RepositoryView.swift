@@ -33,12 +33,14 @@ struct RepositoryView: View {
         }
         .sheet(isPresented: $showingBranchSheet) {
             BranchSheet(isPresented: $showingBranchSheet)
+                .lookWindowStyle()
         }
         .sheet(isPresented: $showingStashSheet) {
             StashSheet(
                 isPresented: $showingStashSheet,
                 scope: stashScope
             )
+            .lookWindowStyle()
         }
         .alert("Push \(pushBranchName)?", isPresented: $store.isConfirmingPush) {
             Button("Cancel", role: .cancel) {
@@ -396,6 +398,7 @@ struct BranchToolbarBadge: View {
 }
 
 struct BranchSheet: View {
+    @FocusState private var isFieldFocused: Bool
     @EnvironmentObject private var store: RepositoryStore
     @Binding var isPresented: Bool
     @State private var name = ""
@@ -415,8 +418,9 @@ struct BranchSheet: View {
             }
 
             TextField("Branch name", text: $name)
-                .textFieldStyle(.roundedBorder)
+                .focused($isFieldFocused)
                 .onSubmit { create() }
+                .lookField(isFocused: isFieldFocused)
 
             HStack {
                 Spacer()
@@ -447,6 +451,7 @@ struct BranchSheet: View {
 }
 
 struct RenameBranchSheet: View {
+    @FocusState private var isFieldFocused: Bool
     @EnvironmentObject private var store: RepositoryStore
     let reference: GitReference
     @Binding var isPresented: Bool
@@ -473,8 +478,9 @@ struct RenameBranchSheet: View {
             }
 
             TextField("Branch name", text: $name)
-                .textFieldStyle(.roundedBorder)
+                .focused($isFieldFocused)
                 .onSubmit { rename() }
+                .lookField(isFocused: isFieldFocused)
 
             HStack {
                 Spacer()
@@ -518,6 +524,7 @@ struct RenameBranchSheet: View {
 /// several levels deep. The sheet shows the resulting name before the rename,
 /// so its Move button is the confirmation.
 struct MoveBranchToPrefixSheet: View {
+    @FocusState private var isFieldFocused: Bool
     @EnvironmentObject private var store: RepositoryStore
     let reference: GitReference
     @Binding var isPresented: Bool
@@ -538,8 +545,9 @@ struct MoveBranchToPrefixSheet: View {
             }
 
             TextField("Prefix, such as experimental/ui", text: $prefix)
-                .textFieldStyle(.roundedBorder)
+                .focused($isFieldFocused)
                 .onSubmit { moveBranch() }
+                .lookField(isFocused: isFieldFocused)
 
             Text(statusMessage)
                 .font(.callout)
@@ -597,6 +605,7 @@ struct MoveBranchToPrefixSheet: View {
 }
 
 struct StashSheet: View {
+    @FocusState private var isFieldFocused: Bool
     @EnvironmentObject private var store: RepositoryStore
     @Binding var isPresented: Bool
     let scope: StashScope
@@ -608,7 +617,8 @@ struct StashSheet: View {
                 .font(.title2.weight(.semibold))
 
             TextField("Message (optional)", text: $message)
-                .textFieldStyle(.roundedBorder)
+                .focused($isFieldFocused)
+                .lookField(isFocused: isFieldFocused)
 
             Text(scope.description)
                 .font(.callout)

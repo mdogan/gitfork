@@ -230,6 +230,7 @@ struct CLIInstallerView: View {
     @State private var installedTarget: URL?
     @State private var errorMessage: String?
     @State private var isConfirmingReplacement = false
+    @FocusState private var isDirectoryFocused: Bool
 
     private let installer = CLIInstallerService()
 
@@ -260,8 +261,9 @@ struct CLIInstallerView: View {
 
                 HStack(spacing: 8) {
                     TextField("Directory", text: $directory)
-                        .textFieldStyle(.roundedBorder)
                         .font(.body.monospaced())
+                        .focused($isDirectoryFocused)
+                        .lookField(isFocused: isDirectoryFocused)
 
                     Menu {
                         ForEach(CLIInstallerService.suggestedDirectories, id: \.self) { path in
@@ -300,7 +302,7 @@ struct CLIInstallerView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Look.shared.fieldBackground, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
                             .strokeBorder(.separator.opacity(0.6))

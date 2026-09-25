@@ -27,6 +27,8 @@ Swift cannot reasonably satisfy.
   service
 - `Sources/ForkCLIKit/`: command parsing, repository discovery, and app launch URL
 - `Sources/ForkCLI/`: `fork` executable entry point
+- `Sources/GitFork/TerminalColors.swift`, `Look.swift`: colors read from the
+  user's Ghostty theme, and the observable `Look` that applies them
 - `Sources/GitFork/Models.swift`: Git domain models and output parsers
 - `Sources/GitFork/*View.swift`: SwiftUI screens and reusable UI
 - `Tests/GitForkTests/`: parser and real-repository integration tests
@@ -94,6 +96,14 @@ swift test --disable-sandbox
 ## UI Conventions
 
 - Use native SwiftUI and AppKit controls and standard macOS interaction patterns.
+- Colors follow the user's Ghostty theme, as in Agentz: `Look` reads the
+  Ghostty config (falling back to Alabaster or Afterglow) and the theme's
+  brightness sets each window's light or dark appearance. Paint surfaces with
+  `Look.shared` (background, sidebar, text) and status colors with
+  `GitForkTheme`, not system background colors or materials. Lists with a
+  selection draw it themselves through `LookListRowBackground` or
+  `SystemSelectionHighlightRemover`; the system highlight's blue and white
+  text ignore the theme.
 - Use SF Symbols instead of custom raster icons when a suitable symbol exists.
 - Add `.help(...)` tooltips to icon-only and compact action controls. In the
   window toolbar, use `.instantHelp(...)` instead: unlabeled icons must explain

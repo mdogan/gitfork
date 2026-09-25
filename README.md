@@ -1,7 +1,6 @@
 # GitFork
 
-GitFork is a macOS-native Git GUI inspired by the clarity and three-column workflow of
-[Fork](https://git-fork.com/). It is written entirely in Swift and SwiftUI and talks to
+GitFork is a macOS-native Git GUI. It is written entirely in Swift and SwiftUI and talks to
 the Git installation built into macOS at `/usr/bin/git`.
 
 ## Features
@@ -15,7 +14,6 @@ the Git installation built into macOS at `/usr/bin/git`.
 - Fetch, fast-forward pull, and push
 - Create and check out branches
 - Stash tracked and untracked changes
-- Install a `fork` command-line helper from the GitFork application menu
 - Native macOS menus, keyboard shortcuts, sheets, toolbar, sidebar, and dark mode
 
 ## Requirements
@@ -70,26 +68,6 @@ fork --version
 
 The helper discovers the repository root and launches GitFork through its
 `gitfork://` URL handler.
-
-## Signed commits
-
-Enable **Sign** beside **Amend** in the commit composer to create an OpenPGP-signed
-commit. The preference is remembered between launches. GitFork uses Git's
-configured signing key and GPG program. It automatically searches GUI-unavailable
-shell paths including `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, and
-standard system binary directories:
-
-```sh
-git config --global user.signingKey <key-id>
-git config --global gpg.program /path/to/gpg
-```
-
-When signing is disabled, GitFork passes `--no-gpg-sign` so the per-commit option
-also overrides a global `commit.gpgSign` setting.
-
-Signed commits show a seal in the history list and a status badge in the commit
-header. Hover the badge to see the signer and signing-key ID. Git may not request
-a password when `gpg-agent` already has the key passphrase cached.
 
 ## Test
 

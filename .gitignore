@@ -2,5 +2,5 @@
 .DS_Store
 DerivedData/
 *.xcuserstate
-./claude
-./codex
+.claude
+.codex

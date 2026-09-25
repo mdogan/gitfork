@@ -130,7 +130,6 @@ struct CommitHashPickerSheet: View {
                 }
 
                 TextField("Commit hash", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
                     .font(.body.monospaced())
                     .focused($isSearchFocused)
                     .onSubmit {
@@ -148,6 +147,7 @@ struct CommitHashPickerSheet: View {
                         }
                         return .handled
                     }
+                    .lookField(isFocused: isSearchFocused, systemImage: "magnifyingglass")
             }
             .padding(20)
 

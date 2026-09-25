@@ -82,7 +82,7 @@ struct WelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             LinearGradient(
-                colors: [Color(nsColor: .windowBackgroundColor), GitForkTheme.accent.opacity(0.035)],
+                colors: [Look.shared.background, GitForkTheme.accent.opacity(0.035)],
                 startPoint: .top,
                 endPoint: .bottom
             )

@@ -148,6 +148,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .lookListBackground(Look.shared.sidebar)
         .safeAreaInset(edge: .bottom) {
             RepositoryIdentityView()
         }
@@ -741,9 +742,11 @@ private struct ReferenceSidebarRow: View {
         }
         .sheet(isPresented: $isRenaming) {
             RenameBranchSheet(reference: reference, isPresented: $isRenaming)
+                .lookWindowStyle()
         }
         .sheet(isPresented: $isChoosingPrefix) {
             MoveBranchToPrefixSheet(reference: reference, isPresented: $isChoosingPrefix)
+                .lookWindowStyle()
         }
     }
 
@@ -1022,7 +1025,7 @@ private struct RepositoryIdentityView: View {
                 .help("Open another repository")
             }
             .padding(10)
-            .background(.bar)
+            .background(Look.shared.sidebar)
         }
     }
 }

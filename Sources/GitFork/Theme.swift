@@ -1,15 +1,15 @@
 import SwiftUI
 
+/// GitFork's colors. The status and diff colors come from the user's Ghostty
+/// theme through `Look`, so they match the terminal.
+@MainActor
 enum GitForkTheme {
-    /// Vivid, high-chroma blue so accented UI reads as deliberate rather than
-    /// as a faint wash. Deeper and more saturated than `blue`, which stays the
-    /// softer hue used for status glyphs and repository identity.
-    static let accent = Color(red: 0.05, green: 0.48, blue: 1.0)
-    static let blue = Color(red: 0.11, green: 0.51, blue: 0.97)
-    static let green = Color(red: 0.09, green: 0.70, blue: 0.37)
-    static let red = Color(red: 0.91, green: 0.21, blue: 0.25)
-    static let purple = Color(red: 0.56, green: 0.30, blue: 0.90)
-    static let orange = Color(red: 0.98, green: 0.52, blue: 0.09)
+    static var accent: Color { Look.shared.accent }
+    static var blue: Color { Look.shared.accent }
+    static var green: Color { Look.shared.green }
+    static var red: Color { Look.shared.red }
+    static var purple: Color { Look.shared.magenta }
+    static var orange: Color { Look.shared.yellow }
 
     /// A curated, harmonious palette used to give authors and labels a stable,
     /// recognizable color. High chroma so each hue is unmistakable, with value
@@ -38,28 +38,21 @@ enum GitForkTheme {
         return identityPalette[Int(hash % UInt64(identityPalette.count))]
     }
 
-    /// Gives each repository name a stable window-toolbar color. Keep the
-    /// redis-server repository on GitFork's original blue accent while other
-    /// names use the same curated deterministic palette as identities.
+    /// Gives each repository name a stable window-toolbar color from the same
+    /// curated deterministic palette as identities.
     static func repositoryColor(for name: String) -> Color {
-        if name.caseInsensitiveCompare("redis-server") == .orderedSame {
-            return blue
-        }
-        return identityColor(for: name)
+        identityColor(for: name)
     }
 
-    /// Foreground for added diff lines, tuned for legibility in each appearance.
-    static func diffAddition(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.35, green: 0.91, blue: 0.50)
-            : Color(red: 0.04, green: 0.55, blue: 0.21)
+    /// Foreground for added diff lines: the theme's green, as a terminal
+    /// shows it.
+    static func diffAddition(_: ColorScheme) -> Color {
+        green
     }
 
-    /// Foreground for removed diff lines, tuned for legibility in each appearance.
-    static func diffDeletion(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 1.0, green: 0.42, blue: 0.42)
-            : Color(red: 0.83, green: 0.07, blue: 0.11)
+    /// Foreground for removed diff lines: the theme's red.
+    static func diffDeletion(_: ColorScheme) -> Color {
+        red
     }
 }
 
@@ -220,11 +213,12 @@ struct GitForkHoverButtonBody<Label: View>: View {
     }
 
     private var neutralHoverColor: Color {
-        Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.065)
+        Look.shared.text.opacity(colorScheme == .dark ? 0.10 : 0.065)
     }
 }
 
 extension Color {
+    @MainActor
     static func statusColor(_ status: String) -> Color {
         switch status {
         case "A": GitForkTheme.green

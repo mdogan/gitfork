@@ -23,6 +23,10 @@ struct GitForkApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             GitForkCommands()
+            // Commands from every scene share one menu bar, and SwiftUI does
+            // not merge a `Menu` added after a standard group, so the theme
+            // menu is attached to this scene only.
+            ThemeCommands()
         }
 
         WindowGroup(
@@ -302,6 +306,56 @@ struct GitForkCommands: Commands {
             )
             openWindow(value: RepositoryWindowValue(url))
         }
+    }
+}
+
+/// View > Theme: follow the Ghostty config, or pick any Ghostty theme, from
+/// Light and Dark submenus, and keep it across launches. Kept apart from `GitForkCommands` so the long theme list
+/// is not rebuilt whenever the focused repository changes.
+struct ThemeCommands: Commands {
+    @AppStorage(Look.selectedThemeKey) private var selectedTheme = ""
+
+    var body: some Commands {
+        CommandGroup(after: .toolbar) {
+            Menu("Theme") {
+                Toggle("Follow Ghostty", isOn: isSelected(nil))
+                Divider()
+                let light = Look.shared.themes.filter { !$0.isDark }
+                let dark = Look.shared.themes.filter(\.isDark)
+                // Without Ghostty.app there are usually no themes; say so
+                // instead of showing empty submenus.
+                if light.isEmpty && dark.isEmpty {
+                    Button("No Ghostty Themes Found") {}
+                        .disabled(true)
+                }
+                if !light.isEmpty {
+                    Menu("Light") { themeToggles(light) }
+                }
+                if !dark.isEmpty {
+                    Menu("Dark") { themeToggles(dark) }
+                }
+            }
+        }
+    }
+
+    private func themeToggles(_ themes: [GhosttyTheme]) -> some View {
+        ForEach(themes, id: \.name) { theme in
+            Toggle(theme.name, isOn: isSelected(theme.name))
+        }
+    }
+
+    /// A picked theme that is no longer on disk falls back to the config, so
+    /// "Follow Ghostty" shows as chosen then too.
+    private func isSelected(_ name: String?) -> Binding<Bool> {
+        Binding(
+            get: {
+                guard let name else {
+                    return !Look.shared.themes.contains { $0.name == selectedTheme }
+                }
+                return selectedTheme == name
+            },
+            set: { if $0 { Look.shared.selectTheme(name) } }
+        )
     }
 }
 

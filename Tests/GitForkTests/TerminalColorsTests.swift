@@ -46,6 +46,14 @@ struct TerminalColorsTests {
     }
 
     @Test
+    func pickedThemeIgnoresConfigColors() {
+        let colors = TerminalColors.from(theme: "background = #fcf4dc\npalette = 1=#c94c22")
+        #expect(colors.background == RGB(hex: "fcf4dc"))
+        #expect(colors.foreground == TerminalColors.ghostty.foreground)
+        #expect(colors.palette == [1: RGB(hex: "c94c22")!])
+    }
+
+    @Test
     func picksThemeSideForAppearance() {
         let value = "light:Alabaster, dark:Afterglow"
         #expect(TerminalColors.pickTheme(value, dark: false) == "Alabaster")
@@ -94,5 +102,63 @@ struct TerminalColorsTests {
         // The Application Support config loads last, so it wins.
         #expect(colors.foreground == RGB(hex: "222222"))
         #expect(colors.background == RGB(hex: "333333"))
+    }
+
+    @Test
+    func listsThemeNamesOnceInFinderOrder() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gitfork-ghostty-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let xdgThemes = home.appendingPathComponent("xdg/ghostty/themes")
+        let supportThemes = home.appendingPathComponent(
+            "Library/Application Support/com.mitchellh.ghostty/themes"
+        )
+        try FileManager.default.createDirectory(
+            at: xdgThemes.appendingPathComponent("Folder"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: supportThemes, withIntermediateDirectories: true)
+        for (directory, name) in [
+            (xdgThemes, "Theme 10"), (xdgThemes, "Mine"), (xdgThemes, ".hidden"),
+            (supportThemes, "Theme 2"), (supportThemes, "Mine"), (supportThemes, "alabaster")
+        ] {
+            try "background = #333333".write(
+                to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8
+            )
+        }
+
+        let environment = ["XDG_CONFIG_HOME": home.appendingPathComponent("xdg").path]
+        let names = GhosttyConfig.themeNames(environment: environment, home: home.path)
+            .filter { ["Theme 10", "Mine", ".hidden", "Theme 2", "alabaster", "Folder"].contains($0) }
+        #expect(names == ["alabaster", "Mine", "Theme 2", "Theme 10"])
+    }
+
+    @Test
+    func sortsThemesIntoLightAndDark() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gitfork-ghostty-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let themes = home.appendingPathComponent("xdg/ghostty/themes")
+        try FileManager.default.createDirectory(at: themes, withIntermediateDirectories: true)
+        for (name, text) in [
+            ("Paper", "background = #f7f7f7"),
+            ("Night", "background = #212121"),
+            ("Bare", "foreground = #111111")
+        ] {
+            try text.write(to: themes.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+
+        let environment = ["XDG_CONFIG_HOME": home.appendingPathComponent("xdg").path]
+        let sorted = GhosttyConfig.themes(
+            named: ["Paper", "Night", "Bare"], environment: environment, home: home.path
+        )
+        #expect(sorted == [
+            GhosttyTheme(name: "Paper", isDark: false),
+            GhosttyTheme(name: "Night", isDark: true),
+            // No background means Ghostty's dark default.
+            GhosttyTheme(name: "Bare", isDark: true)
+        ])
     }
 }

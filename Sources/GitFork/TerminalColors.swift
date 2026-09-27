@@ -82,6 +82,15 @@ struct TerminalColors: Equatable, Sendable {
         return colors
     }
 
+    /// The colors of one theme file alone, on Ghostty's defaults. Used for a
+    /// theme picked in GitFork, so the config's own color settings do not
+    /// cover it.
+    static func from(theme text: String) -> TerminalColors {
+        var colors = ghostty
+        colors.apply(parse(text))
+        return colors
+    }
+
     private mutating func apply(_ settings: [(key: String, value: String)]) {
         for (key, value) in settings {
             switch key {
@@ -121,6 +130,12 @@ struct TerminalColors: Equatable, Sendable {
     }
 }
 
+/// A Ghostty theme GitFork can switch to.
+struct GhosttyTheme: Hashable, Sendable {
+    var name: String
+    var isDark: Bool
+}
+
 /// Finds the user's Ghostty config and theme files on disk.
 enum GhosttyConfig {
     /// The config files Ghostty loads on macOS, in its order, so later ones
@@ -154,14 +169,7 @@ enum GhosttyConfig {
         if name.hasPrefix("/") {
             return try? String(contentsOfFile: name, encoding: .utf8)
         }
-        let xdg = environment["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.config"
-        let directories = [
-            xdg + "/ghostty/themes",
-            home + "/Library/Application Support/com.mitchellh.ghostty/themes",
-            "/Applications/Ghostty.app/Contents/Resources/ghostty/themes",
-            home + "/Applications/Ghostty.app/Contents/Resources/ghostty/themes"
-        ]
-        for directory in directories {
+        for directory in themeDirectories(environment: environment, home: home) {
             if let text = try? String(contentsOfFile: directory + "/" + name, encoding: .utf8) {
                 return text
             }
@@ -169,8 +177,55 @@ enum GhosttyConfig {
         return nil
     }
 
-    /// The terminal colors for the current system appearance.
-    static func colors(dark: Bool) -> TerminalColors {
+    /// Every theme name `themeText` can find, each once, in Finder's order.
+    static func themeNames(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: String = NSHomeDirectory(),
+        fileManager: FileManager = .default
+    ) -> [String] {
+        var names = Set<String>()
+        for directory in themeDirectories(environment: environment, home: home) {
+            guard let entries = try? fileManager.contentsOfDirectory(atPath: directory) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                var isDirectory: ObjCBool = false
+                if fileManager.fileExists(atPath: directory + "/" + entry, isDirectory: &isDirectory),
+                   !isDirectory.boolValue
+                {
+                    names.insert(entry)
+                }
+            }
+        }
+        return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// Each named theme with whether its background is dark, for the Light and
+    /// Dark theme menus. A theme without a background keeps Ghostty's dark one.
+    static func themes(
+        named names: [String],
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: String = NSHomeDirectory()
+    ) -> [GhosttyTheme] {
+        names.map { name in
+            let text = themeText(name, environment: environment, home: home) ?? ""
+            return GhosttyTheme(name: name, isDark: TerminalColors.from(theme: text).isDark)
+        }
+    }
+
+    /// Where Ghostty looks for themes by name. User themes come first.
+    private static func themeDirectories(environment: [String: String], home: String) -> [String] {
+        let xdg = environment["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.config"
+        return [
+            xdg + "/ghostty/themes",
+            home + "/Library/Application Support/com.mitchellh.ghostty/themes",
+            "/Applications/Ghostty.app/Contents/Resources/ghostty/themes",
+            home + "/Applications/Ghostty.app/Contents/Resources/ghostty/themes"
+        ]
+    }
+
+    /// The terminal colors for the current system appearance, or those of
+    /// `theme` alone when it is set and can be found.
+    static func colors(dark: Bool, theme: String? = nil) -> TerminalColors {
+        if let theme, let text = themeText(theme) { return .from(theme: text) }
         guard let config = text() else { return .fallback(dark: dark) }
         return TerminalColors.from(config: config, dark: dark) { themeText($0) }
     }

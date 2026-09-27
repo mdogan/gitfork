@@ -3,18 +3,26 @@ import SwiftUI
 
 /// The windows' colors, taken from the user's Ghostty theme so GitFork matches
 /// their terminal. Follows the system appearance for themes with a light and a
-/// dark side, and reloads the config whenever the app becomes active.
+/// dark side, and reloads the config whenever the app becomes active. A theme
+/// picked in the Theme menu replaces the config's colors, across launches,
+/// until "Follow Ghostty" is picked again.
 @MainActor
 @Observable
 final class Look {
     static let shared = Look()
+    /// The `UserDefaults` key of the picked theme's name; absent to follow
+    /// the Ghostty config.
+    static let selectedThemeKey = "selectedGhosttyTheme"
 
     private(set) var colors: TerminalColors
+    /// Every Ghostty theme on disk, for the Theme menu.
+    private(set) var themes: [GhosttyTheme]
     @ObservationIgnored private var appearanceObservation: NSKeyValueObservation?
     @ObservationIgnored private var activationObserver: NSObjectProtocol?
 
     private init() {
-        colors = GhosttyConfig.colors(dark: Self.systemIsDark)
+        colors = GhosttyConfig.colors(dark: Self.systemIsDark, theme: Self.selectedTheme)
+        themes = GhosttyConfig.themes(named: GhosttyConfig.themeNames())
         appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             MainActor.assumeIsolated { self?.reload() }
         }
@@ -31,9 +39,23 @@ final class Look {
         NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
+    private static var selectedTheme: String? {
+        UserDefaults.standard.string(forKey: selectedThemeKey)
+    }
+
+    /// Uses `name`'s colors from now on, or the Ghostty config's when `nil`.
+    func selectTheme(_ name: String?) {
+        UserDefaults.standard.set(name, forKey: Self.selectedThemeKey)
+        reload()
+    }
+
     func reload() {
-        let new = GhosttyConfig.colors(dark: Self.systemIsDark)
+        let new = GhosttyConfig.colors(dark: Self.systemIsDark, theme: Self.selectedTheme)
         if new != colors { colors = new }
+        // Reading every theme to sort it takes a moment, so only redo it when
+        // themes were added or removed.
+        let names = GhosttyConfig.themeNames()
+        if names != themes.map(\.name) { themes = GhosttyConfig.themes(named: names) }
     }
 
     var isDark: Bool { colors.isDark }

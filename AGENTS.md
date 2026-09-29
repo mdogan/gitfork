@@ -23,6 +23,9 @@ Swift cannot reasonably satisfy.
 - `Sources/GitFork/RepositoryWindows.swift`: repository window value, routing,
   and the registry that keeps one window per repository
 - `Sources/GitFork/GitClient.swift`: asynchronous `/usr/bin/git` process wrapper
+- `Sources/GitFork/GitCommandLog.swift`, `GitCommandLogView.swift`: the
+  session's Git command log, its read/write/delete/network labels, and the
+  Git Command Log window
 - `Sources/GitFork/CLIInstaller.swift`: in-app `fork` helper installation UI and
   service
 - `Sources/ForkCLIKit/`: command parsing, repository discovery, and app launch URL
@@ -162,6 +165,13 @@ swift test --disable-sandbox
   Show signed commits in history and the detail header; a cached `gpg-agent`
   passphrase means signing may legitimately complete without a prompt.
 - Do not add commands that can wait for interactive terminal input.
+- Every command `GitClient` runs is recorded in `GitCommandLog`. Background
+  change polling runs under `GitCommandLogScope.isSuppressed` and is not
+  logged. The log is saved as JSON Lines in
+  `~/Library/Application Support/GitFork/git-command-log.jsonl` and keeps
+  today and the six days before it. When adding a Git command, check that `GitCommandKind.classify`
+  labels it correctly, and add a case to `GitCommandLogTests`; anything that
+  removes a branch, tag, stash, worktree, or uncommitted change is `delete`.
 - Never discard changes, delete branches, rewrite history, or force-push without
   an explicit user action and appropriate confirmation.
 - Keep branch, remote, tag, status, log, and diff parsing covered by focused

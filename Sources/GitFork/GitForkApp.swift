@@ -6,6 +6,7 @@ struct GitForkApp: App {
     static let welcomeWindowID = "welcome"
     static let repositoryWindowID = "repository"
     static let sideBySideDiffWindowID = "side-by-side-diff"
+    static let commandLogWindowID = "command-log"
 
     init() {
         // Toolbar controls present their own zero-delay tooltips. This shortens
@@ -13,6 +14,7 @@ struct GitForkApp: App {
         // of the UI still uses, so hovering explains a control at the same pace
         // everywhere.
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 50])
+        GitCommandLog.shared.startPersisting(to: GitCommandLogFile(url: GitCommandLogFile.defaultURL))
     }
 
     var body: some Scene {
@@ -22,10 +24,12 @@ struct GitForkApp: App {
         .defaultSize(width: 1380, height: 840)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
+            // Commands from every scene share one menu bar, whichever windows
+            // are open, and SwiftUI does not merge a `CommandMenu` or a `Menu`
+            // added by two scenes, so every command is attached to this
+            // scene only. `@FocusedObject` still routes them to the frontmost
+            // repository window.
             GitForkCommands()
-            // Commands from every scene share one menu bar, and SwiftUI does
-            // not merge a `Menu` added after a standard group, so the theme
-            // menu is attached to this scene only.
             ThemeCommands()
         }
 
@@ -37,9 +41,6 @@ struct GitForkApp: App {
         }
         .defaultSize(width: 1380, height: 840)
         .windowToolbarStyle(.unified(showsTitle: false))
-        .commands {
-            GitForkCommands()
-        }
         .handlesExternalEvents(matching: ["*"])
 
         WindowGroup(
@@ -60,6 +61,13 @@ struct GitForkApp: App {
             .lookWindowStyle()
         }
         .defaultSize(width: 1180, height: 760)
+        .windowToolbarStyle(.unified)
+
+        Window("Git Command Log", id: Self.commandLogWindowID) {
+            GitCommandLogView()
+                .lookWindowStyle()
+        }
+        .defaultSize(width: 980, height: 620)
         .windowToolbarStyle(.unified)
 
         Settings {
@@ -277,6 +285,11 @@ struct GitForkCommands: Commands {
             Button("Refresh") { store?.refresh() }
                 .keyboardShortcut("r")
                 .disabled(store?.repositoryURL == nil)
+            Button("Git Command Log") {
+                GitCommandLog.shared.requestFocus(on: store?.repositoryURL)
+                openWindow(id: GitForkApp.commandLogWindowID)
+            }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
             Divider()
             Button("Fetch All") { store?.fetch() }
                 .disabled(store?.repositoryURL == nil || store?.isLoading == true)

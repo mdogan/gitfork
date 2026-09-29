@@ -36,6 +36,7 @@ private final class GitProcessCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
+    private var launched = false
     private var terminationRequested = false
 
     func install(_ process: Process) -> Bool {
@@ -48,6 +49,7 @@ private final class GitProcessCancellation: @unchecked Sendable {
 
     func processDidStart() {
         lock.lock()
+        launched = true
         let process = processToTerminate()
         lock.unlock()
         process?.terminate()
@@ -73,6 +75,12 @@ private final class GitProcessCancellation: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return cancelled
+    }
+
+    var hasLaunched: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return launched
     }
 
     private func processToTerminate() -> Process? {
@@ -1422,7 +1430,55 @@ struct GitClient: Sendable {
     ) async throws -> GitCommandResult {
         let gitURL = self.gitURL
         let cancellation = GitProcessCancellation()
-        return try await withTaskCancellationHandler {
+        let startedAt = Date()
+        func log(_ outcome: GitCommandOutcome, outputByteCount: Int = 0, error: String) {
+            GitCommandLog.record(
+                arguments: arguments,
+                directory: directory,
+                hasInput: input != nil,
+                startedAt: startedAt,
+                outcome: outcome,
+                outputByteCount: outputByteCount,
+                errorOutput: error
+            )
+        }
+
+        let result: GitCommandResult
+        do {
+            result = try await runProcess(
+                arguments,
+                in: directory,
+                input: input,
+                gitURL: gitURL,
+                cancellation: cancellation
+            )
+        } catch is CancellationError {
+            // Only commands that actually ran belong in the log.
+            if cancellation.hasLaunched {
+                log(.cancelled, error: "")
+            }
+            throw CancellationError()
+        } catch {
+            log(.failed(exitCode: nil), error: error.localizedDescription)
+            throw error
+        }
+
+        log(
+            result.exitCode == 0 ? .succeeded : .failed(exitCode: result.exitCode),
+            outputByteCount: result.output.utf8.count,
+            error: result.error
+        )
+        return result
+    }
+
+    private func runProcess(
+        _ arguments: [String],
+        in directory: URL,
+        input: Data?,
+        gitURL: URL,
+        cancellation: GitProcessCancellation
+    ) async throws -> GitCommandResult {
+        try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await Task.detached(priority: .userInitiated) {
                 let process = Process()

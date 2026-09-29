@@ -277,6 +277,7 @@ final class RepositoryStore: ObservableObject {
             try Task.checkCancellation()
             self.stopMonitoring()
             self.repositoryURL = root
+            GitCommandLog.shared.registerRepository(root)
             self.remember(root)
             self.prepareForRepositorySwitch()
             try await self.reload(root: root)
@@ -1143,18 +1144,22 @@ final class RepositoryStore: ObservableObject {
         guard isMonitoringActive else { return }
         let monitorInterval = monitorInterval
         monitorTask = Task { [weak self] in
-            if refreshImmediately {
-                guard let self else { return }
-                await self.refreshIfRepositoryChanged(root: root)
-            }
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: monitorInterval)
-                } catch {
-                    return
+            // Polling runs Git every few seconds; keep it out of the command
+            // log so the commands the user caused stay visible.
+            await GitCommandLogScope.$isSuppressed.withValue(true) {
+                if refreshImmediately {
+                    guard let self else { return }
+                    await self.refreshIfRepositoryChanged(root: root)
                 }
-                guard let self else { return }
-                await self.refreshIfRepositoryChanged(root: root)
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(for: monitorInterval)
+                    } catch {
+                        return
+                    }
+                    guard let self else { return }
+                    await self.refreshIfRepositoryChanged(root: root)
+                }
             }
         }
     }

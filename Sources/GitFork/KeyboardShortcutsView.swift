@@ -28,6 +28,7 @@ struct KeyboardShortcutSection: Identifiable, Hashable {
                 KeyboardShortcutReference(action: "Open in Zed", keys: "⌘E"),
                 KeyboardShortcutReference(action: "Open in Finder", keys: "⇧⌘R"),
                 KeyboardShortcutReference(action: "Refresh", keys: "⌘R"),
+                KeyboardShortcutReference(action: "Git Command Log", keys: "⇧⌘L"),
                 KeyboardShortcutReference(action: "Keyboard Shortcuts", keys: "?"),
             ]
         ),

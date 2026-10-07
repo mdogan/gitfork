@@ -16,6 +16,16 @@ struct RepositoryWindowValue: Codable, Hashable {
     }
 }
 
+/// What an open request does with the window that asked for it once no other
+/// window already shows the repository.
+enum RepositoryOpenPlacement: Equatable {
+    /// A window showing a repository leaves it in place and opens a new window.
+    case newWindow
+    /// The asking window switches to the repository, as moving between the
+    /// worktrees of one repository does.
+    case replaceCurrentWindow
+}
+
 /// Where a repository belongs once the window layer resolves its root.
 enum RepositoryWindowDestination: Equatable {
     /// The asking window already shows the repository.
@@ -24,16 +34,20 @@ enum RepositoryWindowDestination: Equatable {
     case existingWindow
     /// The asking window has no repository yet, so it adopts this one.
     case adoptInCurrentWindow
+    /// The asking window drops its repository and shows this one instead.
+    case replaceInCurrentWindow
     case newWindow
 }
 
 enum RepositoryWindowRouting {
     /// One repository is never open in two windows: an already-open repository
-    /// wins, an empty window adopts, and everything else opens a new window.
+    /// wins and an empty window adopts. Otherwise `placement` decides between
+    /// replacing the asking window's repository and opening a new window.
     static func destination(
         root: URL,
         currentRepository: URL?,
-        isOpenInAnotherWindow: Bool
+        isOpenInAnotherWindow: Bool,
+        placement: RepositoryOpenPlacement = .newWindow
     ) -> RepositoryWindowDestination {
         if currentRepository?.standardizedFileURL.path == root.standardizedFileURL.path {
             return .currentWindow
@@ -41,7 +55,15 @@ enum RepositoryWindowRouting {
         if isOpenInAnotherWindow {
             return .existingWindow
         }
-        return currentRepository == nil ? .adoptInCurrentWindow : .newWindow
+        guard currentRepository != nil else {
+            return .adoptInCurrentWindow
+        }
+        switch placement {
+        case .newWindow:
+            return .newWindow
+        case .replaceCurrentWindow:
+            return .replaceInCurrentWindow
+        }
     }
 }
 

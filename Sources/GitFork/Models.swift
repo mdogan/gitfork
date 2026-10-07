@@ -340,6 +340,62 @@ struct GitWorktree: Identifiable, Hashable, Sendable {
                 : $0
         }
     }
+
+    /// Whether `root` is a linked worktree, read from its files instead of Git
+    /// so the recent-repositories list can check every entry while it loads.
+    static func isLinked(at root: URL) -> Bool {
+        linkedGitDirectory(at: root) != nil
+    }
+
+    /// The main worktree of the repository that the linked worktree at `root`
+    /// belongs to. `nil` when `root` is not a linked worktree, and when the
+    /// repository is bare or keeps its Git directory away from its main
+    /// worktree, so there is no main worktree to point at.
+    static func mainWorktree(ofLinked root: URL) -> URL? {
+        guard let gitDirectory = linkedGitDirectory(at: root),
+              let path = firstLine(of: gitDirectory.appendingPathComponent("commondir")) else {
+            return nil
+        }
+
+        // Git finds the main worktree the same way: the common directory
+        // without its trailing `.git`.
+        let commonDirectory = resolve(path, against: gitDirectory).standardizedFileURL
+        guard commonDirectory.lastPathComponent == ".git" else { return nil }
+        return commonDirectory.deletingLastPathComponent()
+    }
+
+    /// A linked worktree's `.git` is a file naming `<common dir>/worktrees/<name>`,
+    /// and only that directory holds a `commondir` file; a submodule's `.git`
+    /// file names a directory without one.
+    private static func linkedGitDirectory(at root: URL) -> URL? {
+        guard let line = firstLine(of: root.appendingPathComponent(".git")),
+              line.hasPrefix("gitdir:") else {
+            return nil
+        }
+
+        let path = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        let gitDirectory = resolve(path, against: root)
+        guard FileManager.default.fileExists(
+            atPath: gitDirectory.appendingPathComponent("commondir").path
+        ) else {
+            return nil
+        }
+        return gitDirectory
+    }
+
+    private static func firstLine(of file: URL) -> String? {
+        guard let contents = try? String(contentsOf: file, encoding: .utf8),
+              let line = contents.split(whereSeparator: \.isNewline).first else {
+            return nil
+        }
+        return String(line).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func resolve(_ path: String, against directory: URL) -> URL {
+        path.hasPrefix("/")
+            ? URL(fileURLWithPath: path, isDirectory: true)
+            : directory.appendingPathComponent(path, isDirectory: true)
+    }
 }
 
 enum GitSignatureStatus: Character, Hashable, Sendable {

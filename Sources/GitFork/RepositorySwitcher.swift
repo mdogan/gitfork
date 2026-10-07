@@ -66,6 +66,11 @@ enum WorktreeSwitcherOptions {
         selectable(from: worktrees).first(where: \.isCurrent)
     }
 
+    /// The worktrees this window can move to or open beside itself.
+    static func others(in worktrees: [GitWorktree]) -> [GitWorktree] {
+        selectable(from: worktrees).filter { !$0.isCurrent }
+    }
+
     static func currentLabel(for worktree: GitWorktree?) -> String {
         guard let worktree else { return "Worktrees" }
         return worktree.branchName ?? (worktree.isDetached ? "Detached" : worktree.displayName)
@@ -120,7 +125,7 @@ struct RepositorySwitcherMenu: View {
     }
 
     private func isCurrent(_ repository: URL) -> Bool {
-        repository.standardizedFileURL == store.repositoryURL?.standardizedFileURL
+        repository.standardizedFileURL == store.mainWorktreeURL?.standardizedFileURL
     }
 
     private func repositoryLabel(_ repository: URL) -> String {
@@ -147,7 +152,7 @@ struct WorktreeSwitcherMenu: View {
             Section("Worktrees") {
                 ForEach(worktrees) { worktree in
                     Button {
-                        open(worktree)
+                        open(worktree, placement: .replaceCurrentWindow)
                     } label: {
                         Label(
                             WorktreeSwitcherOptions.optionLabel(for: worktree),
@@ -156,6 +161,18 @@ struct WorktreeSwitcherMenu: View {
                     }
                 }
             }
+
+            Divider()
+
+            Menu {
+                ForEach(WorktreeSwitcherOptions.others(in: worktrees)) { worktree in
+                    Button(WorktreeSwitcherOptions.optionLabel(for: worktree)) {
+                        open(worktree, placement: .newWindow)
+                    }
+                }
+            } label: {
+                Label("Open in New Window", systemImage: "macwindow.badge.plus")
+            }
         } label: {
             WorktreeSwitcherLabel(
                 title: WorktreeSwitcherOptions.currentLabel(for: currentWorktree)
@@ -163,17 +180,18 @@ struct WorktreeSwitcherMenu: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize(horizontal: true, vertical: false)
-        .instantHelp("Switch worktree")
+        .instantHelp("Switch this window to another worktree")
         .accessibilityLabel("Switch worktree")
         .accessibilityValue(
             currentWorktree.map(WorktreeSwitcherOptions.optionLabel(for:)) ?? ""
         )
     }
 
-    private func open(_ worktree: GitWorktree) {
+    private func open(_ worktree: GitWorktree, placement: RepositoryOpenPlacement) {
         guard !worktree.isCurrent else { return }
         store.requestOpenRepository(
-            URL(fileURLWithPath: worktree.path, isDirectory: true)
+            URL(fileURLWithPath: worktree.path, isDirectory: true),
+            placement: placement
         )
     }
 }
@@ -320,7 +338,7 @@ struct RepositorySwitcherSheet: View {
     }
 
     private func isCurrent(_ repository: URL) -> Bool {
-        repository.standardizedFileURL == store.repositoryURL?.standardizedFileURL
+        repository.standardizedFileURL == store.mainWorktreeURL?.standardizedFileURL
     }
 
     private func isSelected(_ repository: URL) -> Bool {
@@ -331,7 +349,7 @@ struct RepositorySwitcherSheet: View {
         selectedRepository = RepositorySwitcherNavigation.reconcile(
             selection: selectedRepository,
             repositories: repositories,
-            currentRepository: store.repositoryURL
+            currentRepository: store.mainWorktreeURL
         )
     }
 

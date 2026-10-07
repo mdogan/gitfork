@@ -5,6 +5,10 @@ import Foundation
 @MainActor
 final class RepositoryStore: ObservableObject {
     @Published private(set) var repositoryURL: URL?
+    /// The main worktree of the repository this window shows. It is
+    /// `repositoryURL` itself unless the window shows a linked worktree, so
+    /// the repository keeps its name while the window moves between worktrees.
+    @Published private(set) var mainWorktreeURL: URL?
     @Published private(set) var branch = ""
     @Published private(set) var upstream: String?
     @Published private(set) var pushTarget: GitPushTarget?
@@ -110,7 +114,7 @@ final class RepositoryStore: ObservableObject {
     }
 
     var repositoryName: String {
-        repositoryURL?.lastPathComponent ?? "GitFork"
+        mainWorktreeURL?.lastPathComponent ?? "GitFork"
     }
 
     var stagedChanges: [WorkingChange] {
@@ -255,13 +259,20 @@ final class RepositoryStore: ObservableObject {
 
     /// Resolves the repository root, then hands it to the window layer. One
     /// repository stays in one window: an already-open repository is brought
-    /// forward, an empty window adopts the repository, and a window that
-    /// already shows another repository opens a new one.
-    func requestOpenRepository(_ url: URL) {
+    /// forward and an empty window adopts the repository. A window that
+    /// already shows another repository opens a new window, or switches in
+    /// place when `placement` is `.replaceCurrentWindow`.
+    func requestOpenRepository(
+        _ url: URL,
+        placement: RepositoryOpenPlacement = .newWindow
+    ) {
         _ = startOperation("Opening repository") {
             let root = try await self.client.repositoryRoot(from: url)
             try Task.checkCancellation()
-            self.pendingOpenRequest = RepositoryOpenRequest(root: root)
+            self.pendingOpenRequest = RepositoryOpenRequest(
+                root: root,
+                placement: placement
+            )
         }
     }
 
@@ -277,6 +288,7 @@ final class RepositoryStore: ObservableObject {
             try Task.checkCancellation()
             self.stopMonitoring()
             self.repositoryURL = root
+            self.mainWorktreeURL = GitWorktree.mainWorktree(ofLinked: root) ?? root
             GitCommandLog.shared.registerRepository(root)
             self.remember(root)
             self.prepareForRepositorySwitch()
@@ -1522,7 +1534,10 @@ final class RepositoryStore: ObservableObject {
         errorMessage = error.localizedDescription
     }
 
+    /// Linked worktrees stay out of the recent list: they are reached through
+    /// their repository's worktree menu, so the list names each repository once.
     private func remember(_ url: URL) {
+        guard !GitWorktree.isLinked(at: url) else { return }
         recentRepositories.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
         recentRepositories.insert(url, at: 0)
         recentRepositories = Array(recentRepositories.prefix(8))
@@ -1533,7 +1548,10 @@ final class RepositoryStore: ObservableObject {
     private static func loadRecentRepositories() -> [URL] {
         (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+            .filter {
+                FileManager.default.fileExists(atPath: $0.path)
+                    && !GitWorktree.isLinked(at: $0)
+            }
     }
 }
 
@@ -1543,4 +1561,5 @@ final class RepositoryStore: ObservableObject {
 struct RepositoryOpenRequest: Equatable {
     let id = UUID()
     let root: URL
+    let placement: RepositoryOpenPlacement
 }

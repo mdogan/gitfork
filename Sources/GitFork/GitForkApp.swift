@@ -127,12 +127,12 @@ struct RepositoryWindow: View {
             .onChange(of: store.pendingOpenRequest) { _, request in
                 guard let request else { return }
                 store.clearPendingOpenRequest()
-                route(to: request.root)
+                route(request)
             }
     }
 
     private var repositoryToolbarColor: Color {
-        guard let name = store.repositoryURL?.lastPathComponent else {
+        guard let name = store.mainWorktreeURL?.lastPathComponent else {
             return GitForkTheme.accent
         }
         return GitForkTheme.repositoryColor(for: name)
@@ -178,16 +178,18 @@ struct RepositoryWindow: View {
     }
 
     /// Sends a resolved repository to the window that should show it: the one
-    /// already showing it, this window while it is still empty, or a new window.
-    private func route(to root: URL) {
-        let value = RepositoryWindowValue(root)
+    /// already showing it, this window while it is empty or when the request
+    /// replaces its repository, or a new window.
+    private func route(_ request: RepositoryOpenRequest) {
+        let value = RepositoryWindowValue(request.root)
         let destination = RepositoryWindowRouting.destination(
-            root: root,
+            root: request.root,
             currentRepository: store.repositoryURL,
             isOpenInAnotherWindow: RepositoryWindowRegistry.shared.isOpen(
                 value,
                 excluding: hostingWindow
-            )
+            ),
+            placement: request.placement
         )
 
         switch destination {
@@ -195,7 +197,10 @@ struct RepositoryWindow: View {
             break
         case .existingWindow:
             RepositoryWindowRegistry.shared.focus(value, excluding: hostingWindow)
-        case .adoptInCurrentWindow:
+        case .adoptInCurrentWindow, .replaceInCurrentWindow:
+            // Changing the window's value, not just the store, keeps the
+            // window's identity in step so `openWindow(value:)` and state
+            // restoration see the repository it now shows.
             repository = value
         case .newWindow:
             RepositoryWindowRegistry.shared.prepareWindowSize(from: hostingWindow)

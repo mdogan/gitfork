@@ -234,6 +234,13 @@ private struct WorktreeSidebarRow: View {
             }
             .disabled(worktree.isCurrent || worktree.isPrunable)
 
+            Button {
+                open(placement: .newWindow)
+            } label: {
+                Label("Open in New Window", systemImage: "macwindow.badge.plus")
+            }
+            .disabled(worktree.isCurrent || worktree.isPrunable)
+
             if worktree.isPrunable {
                 Divider()
                 Button(role: .destructive) {
@@ -354,10 +361,11 @@ private struct WorktreeSidebarRow: View {
         isConfirmingAction = true
     }
 
-    private func open() {
+    private func open(placement: RepositoryOpenPlacement = .replaceCurrentWindow) {
         guard !worktree.isCurrent, !worktree.isPrunable else { return }
-        store.openRepository(
-            URL(fileURLWithPath: worktree.path, isDirectory: true)
+        store.requestOpenRepository(
+            URL(fileURLWithPath: worktree.path, isDirectory: true),
+            placement: placement
         )
     }
 }
@@ -1009,7 +1017,7 @@ private struct RepositoryIdentityView: View {
                     Text(store.repositoryName)
                         .font(.body.weight(.semibold))
                         .lineLimit(1)
-                    Text(store.repositoryURL?.deletingLastPathComponent().path ?? "")
+                    Text(store.mainWorktreeURL?.deletingLastPathComponent().path ?? "")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

@@ -132,10 +132,16 @@ swift test --disable-sandbox
   line spans several visual rows.
 - Repository switching uses the persisted `recentRepositories` list. Clearly
   mark the active repository and retain an “Open Other Repository…” action.
+  Linked worktrees are never recorded in or shown from that list; they are
+  reached through their repository's worktree menu.
 - Each window owns a `RepositoryStore` and shows one repository, and one
   repository is never open in two windows. Switching repositories opens or
   focuses another window; only a window with no repository adopts one in place.
-  Route every user-initiated open through `requestOpenRepository(_:)`;
+  Switching worktrees, from the toolbar worktree menu or the sidebar, replaces
+  the window's repository in place (`placement: .replaceCurrentWindow`), and
+  both offer "Open in New Window" for the other worktrees. A worktree another
+  window already shows is brought forward instead.
+  Route every user-initiated open through `requestOpenRepository(_:placement:)`;
   `openRepository(_:)` loads into the window that already owns the request.
 - The `fork` helper is bundled under `Contents/Helpers` and installed from the
   application menu. Keep its `gitfork://open?path=...` contract synchronized

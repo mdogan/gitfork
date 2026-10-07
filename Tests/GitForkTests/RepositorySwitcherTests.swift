@@ -118,6 +118,10 @@ struct RepositorySwitcherTests {
                 == [current, linked]
         )
         #expect(WorktreeSwitcherOptions.current(in: [current, linked]) == current)
+        #expect(
+            WorktreeSwitcherOptions.others(in: [current, linked, stale, bare])
+                == [linked]
+        )
     }
 
     @Test

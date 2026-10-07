@@ -930,6 +930,102 @@ struct GitParserTests {
     }
 
     @Test
+    func recognizesLinkedWorktreesFromTheirFiles() throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkLinkedWorktreeTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("repository")
+        let linked = container.appendingPathComponent("linked-worktree")
+        let submodule = container.appendingPathComponent("submodule")
+        let plain = container.appendingPathComponent("plain")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try "one\n".write(
+            to: root.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try runGit(["worktree", "add", "-b", "feature/linked", linked.path], at: root)
+
+        // A submodule's `.git` file points into `.git/modules`, which has no
+        // `commondir`.
+        let moduleDirectory = root.appendingPathComponent(".git/modules/submodule")
+        try FileManager.default.createDirectory(
+            at: moduleDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: submodule, withIntermediateDirectories: true)
+        try "gitdir: \(moduleDirectory.path)\n".write(
+            to: submodule.appendingPathComponent(".git"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        #expect(GitWorktree.isLinked(at: linked))
+        #expect(!GitWorktree.isLinked(at: root))
+        #expect(!GitWorktree.isLinked(at: submodule))
+        #expect(!GitWorktree.isLinked(at: plain))
+
+        #expect(
+            GitWorktree.mainWorktree(ofLinked: linked)?.resolvingSymlinksInPath().path
+                == root.resolvingSymlinksInPath().path
+        )
+        #expect(GitWorktree.mainWorktree(ofLinked: root) == nil)
+        #expect(GitWorktree.mainWorktree(ofLinked: submodule) == nil)
+
+        // A bare repository has no main worktree to name.
+        let bare = container.appendingPathComponent("bare.git")
+        let bareLinked = container.appendingPathComponent("bare-linked")
+        try runGit(["clone", "--bare", root.path, bare.path], at: container)
+        try runGit(["worktree", "add", bareLinked.path, "main"], at: bare)
+        #expect(GitWorktree.isLinked(at: bareLinked))
+        #expect(GitWorktree.mainWorktree(ofLinked: bareLinked) == nil)
+    }
+
+    @Test
+    @MainActor
+    func storeNamesALinkedWorktreeAfterItsMainWorktree() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitForkWorktreeNameTests-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("repository")
+        let linked = container.appendingPathComponent("linked-worktree")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        try runGit(["init", "-b", "main"], at: root)
+        try runGit(["config", "user.name", "GitFork Tests"], at: root)
+        try runGit(["config", "user.email", "tests@example.com"], at: root)
+        try "one\n".write(
+            to: root.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try runGit(["add", "README.md"], at: root)
+        try runGit(["commit", "-m", "Initial commit"], at: root)
+        try runGit(["worktree", "add", "-b", "feature/linked", linked.path], at: root)
+
+        let store = RepositoryStore()
+        store.setMonitoringActive(false)
+        store.openRepository(linked)
+        try await settle(store)
+
+        #expect(store.repositoryURL?.lastPathComponent == "linked-worktree")
+        #expect(store.repositoryName == "repository")
+
+        store.openRepository(root)
+        try await settle(store)
+
+        #expect(store.repositoryURL?.lastPathComponent == "repository")
+        #expect(store.repositoryName == "repository")
+    }
+
+    @Test
     func removesCleanDetachedWorktreeWithoutForce() async throws {
         let container = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitForkRemoveWorktreeTests-\(UUID().uuidString)")

@@ -76,6 +76,46 @@ struct RepositoryWindowRoutingTests {
             ) == .newWindow
         )
     }
+
+    @Test
+    func replacingRequestSwitchesTheAskingWindow() {
+        #expect(
+            RepositoryWindowRouting.destination(
+                root: root,
+                currentRepository: URL(fileURLWithPath: "/tmp/repos/other"),
+                isOpenInAnotherWindow: false,
+                placement: .replaceCurrentWindow
+            ) == .replaceInCurrentWindow
+        )
+    }
+
+    @Test
+    func replacingRequestStillFocusesTheWindowThatShowsTheRepository() {
+        #expect(
+            RepositoryWindowRouting.destination(
+                root: root,
+                currentRepository: URL(fileURLWithPath: "/tmp/repos/other"),
+                isOpenInAnotherWindow: true,
+                placement: .replaceCurrentWindow
+            ) == .existingWindow
+        )
+        #expect(
+            RepositoryWindowRouting.destination(
+                root: root,
+                currentRepository: root,
+                isOpenInAnotherWindow: false,
+                placement: .replaceCurrentWindow
+            ) == .currentWindow
+        )
+        #expect(
+            RepositoryWindowRouting.destination(
+                root: root,
+                currentRepository: nil,
+                isOpenInAnotherWindow: false,
+                placement: .replaceCurrentWindow
+            ) == .adoptInCurrentWindow
+        )
+    }
 }
 
 struct NewWindowFrameTests {
